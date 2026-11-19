@@ -8,6 +8,7 @@ from .adjoint import (
     scalar_operator_fingerprint,
     solve_scalar_adjoint,
 )
+from .ase import DeePHFCalculator
 
 from .capabilities import (
     DeePHFCapabilityError,
@@ -20,6 +21,19 @@ from .gradient import (
     RKSDeePHFGradients,
     UHFDeePHFGradients,
     UKSDeePHFGradients,
+)
+from .gpu_method import (
+    GPUDeePHF,
+    GPUDeePHFGradients,
+    GPURKSDeePHF,
+    GPUUHFDeePHF,
+    GPUUKSDeePHF,
+)
+from .gpu_scanner import (
+    GPUDeePHFFiniteDifferenceScanner,
+    GPUDeePHFGradientScanner,
+    GPUDeePHFScannerError,
+    GPUUHFDeePHFGradientScanner,
 )
 from .force_data import (
     RHFForceDataError,
@@ -44,6 +58,7 @@ from .pyscf_rhf import (
     validate_reference,
 )
 from .scanner import RHFDeePHFGradientScanner, RHFDeePHFScannerError
+from .contracts import RootContinuityError
 from .unrestricted_method import UHFDeePHF, UKSDeePHF
 from .pyscf_uhf import (
     UHFAdjoint,
@@ -91,7 +106,17 @@ from .workflow import build_reference, evaluate_molecule, make_deephf
 
 __all__ = [
     "DeePHF",
+    "DeePHFCalculator",
     "DeePHFCapabilityError",
+    "GPUDeePHF",
+    "GPUDeePHFFiniteDifferenceScanner",
+    "GPUDeePHFGradients",
+    "GPUDeePHFGradientScanner",
+    "GPUDeePHFScannerError",
+    "GPURKSDeePHF",
+    "GPUUHFDeePHF",
+    "GPUUHFDeePHFGradientScanner",
+    "GPUUKSDeePHF",
     "AdjointDiagnostics",
     "AdjointError",
     "AdjointResult",
@@ -113,6 +138,7 @@ __all__ = [
     "RHFRootSnapshot",
     "RHFScannerReferenceError",
     "RHFScannerReferenceFactory",
+    "RootContinuityError",
     "RKSDeePHF",
     "RKSDeePHFGradients",
     "RKSDeePHFZVectorGradients",

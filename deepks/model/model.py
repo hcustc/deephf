@@ -14,7 +14,7 @@ SCALE_EPS = 1e-8
 CHECKPOINT_FORMAT_VERSION = 1
 FORCE_JACOBIAN_SEMANTICS = "dq_dR_relaxed"
 FORCE_SCHEMA_ID = "deepks.deephf.rhf-force-data"
-FORCE_SCHEMA_VERSION = 1
+FORCE_SCHEMA_VERSION = 2
 FORCE_DESCRIPTOR_DEFINITION = "ordered_projected_density_eigenvalues"
 FORCE_DESCRIPTOR_SPIN_SEMANTICS = "spin_summed"
 FORCE_REFERENCE_FAMILY = "RHF"
@@ -31,6 +31,8 @@ FORCE_CHECKPOINT_METADATA_KEYS = {
     "projector_sha256",
     "reference_family",
     "response_backend",
+    "target",
+    "target_fingerprint",
 }
 
 
@@ -183,6 +185,33 @@ def _validate_checkpoint_force_metadata(
             raise ValueError(
                 "force-training checkpoint contract fingerprint does not match the data"
             )
+    from deepks.data.force_schema import (
+        normalize_target_identity,
+        target_identity_fingerprint,
+    )
+
+    try:
+        target = normalize_target_identity(metadata["target"])
+    except ValueError as error:
+        raise ValueError(
+            "force-training checkpoint target identity is invalid"
+        ) from error
+    if metadata["target"] != target:
+        raise ValueError(
+            "force-training checkpoint target identity must be canonical"
+        )
+    target_fingerprint = normalize_force_contract_fingerprint(
+        metadata["target_fingerprint"]
+    )
+    if metadata["target_fingerprint"] != target_fingerprint:
+        raise ValueError(
+            "force-training checkpoint target_fingerprint must be a lowercase "
+            "64-digit hexadecimal string"
+        )
+    if target_fingerprint != target_identity_fingerprint(target):
+        raise ValueError(
+            "force-training checkpoint target_fingerprint does not match target"
+        )
     if expected_contract is not None:
         from deepks.data.force_schema import validate_force_checkpoint_metadata
 
@@ -977,6 +1006,32 @@ def validate_force_model_architecture(model, *, training: bool) -> None:
         )
     if force_model_structure_evidence(model) is None:
         raise ValueError("the force CorrNet execution graph could not be inspected")
+
+
+def corrnet_is_shell_permutation_invariant(model) -> bool:
+    """Return whether one CorrNet is invariant to eigenvalue order per shell."""
+    if type(model) is not CorrNet or type(model.embedder) not in {
+        TraceEmbedding,
+        ThermalEmbedding,
+    }:
+        return False
+    shell_sizes = tuple(model.shell_sec or ())
+    if not shell_sizes or sum(shell_sizes) != model.input_dim:
+        return False
+    if tuple(model.embedder.shell_sec) != shell_sizes:
+        return False
+    shift = model.input_shift.detach()
+    scale = model.input_scale.detach()
+    linear = model.linear.weight.detach()[0]
+    offset = 0
+    for shell_size in shell_sizes:
+        stop = offset + shell_size
+        for values in (shift, scale, linear):
+            block = values[offset:stop]
+            if not torch.equal(block, block[:1].expand_as(block)):
+                return False
+        offset = stop
+    return True
 
 
 def force_model_structure_evidence(model):
