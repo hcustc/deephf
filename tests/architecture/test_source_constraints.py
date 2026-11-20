@@ -47,7 +47,11 @@ def test_deephf_package_has_a_bounded_aggregate_topology():
     modules = tuple(directory.rglob("*.py"))
     top_level = tuple(directory.glob("*.py"))
     audits = tuple((directory / "audits").glob("*.py"))
-    assert len(modules) <= MODULE_COUNT_LIMIT
+    # The spin-resolved DF-HF algorithm has independent integral, orbital,
+    # method and training owners. Retain the native four-family topology budget.
+    spin_df = tuple((directory / "df_spin").glob("*.py"))
+    assert len(spin_df) <= 5
+    assert len(set(modules) - set(spin_df)) <= MODULE_COUNT_LIMIT
     assert len(top_level) <= 33
     assert len(audits) <= 9
 

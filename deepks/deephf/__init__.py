@@ -87,10 +87,16 @@ from .zvector import (
     UHFDeePHFZVectorGradients,
     UKSDeePHFZVectorGradients,
 )
+from .df_spin import DFSpinDeePHF, SpinForceFrame, SpinTrainingState, device_df_jk, spin_energy_force_loss
 from .workflow import build_reference, evaluate_molecule, make_deephf
 
 __all__ = [
     "DeePHF",
+    "DFSpinDeePHF",
+    "SpinForceFrame",
+    "SpinTrainingState",
+    "spin_energy_force_loss",
+    "device_df_jk",
     "DeePHFCapabilityError",
     "AdjointDiagnostics",
     "AdjointError",

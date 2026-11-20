@@ -13,6 +13,7 @@ from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
 from .method import DeePHF
 from .rks_method import RKSDeePHF
+from .df_spin import DFSpinDeePHF
 from .unrestricted_method import UHFDeePHF, UKSDeePHF
 
 
@@ -28,7 +29,11 @@ REFERENCE_FAMILIES = frozenset(("rhf", "uhf", "rks", "uks"))
 def make_deephf(reference, model, *, projector_basis=None, device="cpu", response_options=None, adjoint_options=None):
     """Construct the exact public DeePHF method matching a native reference."""
     if isinstance(model, SpinCorrNet):
-        raise ValueError("SpinCorrNet supports energy-only inference")
+        if response_options or adjoint_options:
+            raise ValueError("custom response options are unsupported for spin gradients")
+        if projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
+            raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
+        return DFSpinDeePHF(reference, model, device=device)
     method_class = METHOD_CLASSES.get(type(reference))
     if method_class is None:
         raise TypeError("the reference type has no strict DeePHF method")
@@ -44,7 +49,7 @@ def make_deephf(reference, model, *, projector_basis=None, device="cpu", respons
     )
 
 
-def build_reference(molecule, family, *, scf_args=None, verbose=0):
+def build_reference(molecule, family, *, scf_args=None, verbose=0, density_fit=False):
     """Build and converge one exact native reference in the accepted support tier."""
     if type(family) is not str or family.lower() not in REFERENCE_FAMILIES:
         raise ValueError("reference family must be one of rhf, uhf, rks, or uks")
@@ -62,6 +67,10 @@ def build_reference(molecule, family, *, scf_args=None, verbose=0):
     expected_type = {"rhf": scf.hf.RHF, "uhf": scf.uhf.UHF, "rks": dft.rks.RKS, "uks": dft.uks.UKS}[family]
     if type(reference) is not expected_type:
         raise TypeError(f"the requested {family.upper()} constructor did not produce its exact native reference type")
+    if density_fit:
+        if family not in {"rhf", "uhf"}:
+            raise ValueError("the spin DF-HF workflow requires RHF or UHF")
+        reference = reference.density_fit()
     reference.verbose = verbose
     controls = {
         "conv_tol": 1.0e-13,
@@ -69,6 +78,10 @@ def build_reference(molecule, family, *, scf_args=None, verbose=0):
         "conv_tol_cpscf": 1.0e-12,
         "max_cycle": 100,
     }
+    if density_fit:
+        # Tight total-energy stopping alone can stall on a converged UHF
+        # branch. Check canonical physical-Fock stationarity at the force API.
+        controls.update(conv_tol=1e-12, conv_tol_grad=1e-8)
     controls.update({} if scf_args is None else dict(scf_args))
     supported_controls = {
         "conv_tol",
@@ -111,17 +124,24 @@ def evaluate_molecule(
     adjoint_options=None,
     verbose=0,
     energy_only=False,
+    density_fit=False,
 ):
     """Evaluate one state, optionally omitting derivative and descriptor outputs."""
-    reference = build_reference(molecule, family, scf_args=scf_args, verbose=verbose)
+    if density_fit and not isinstance(model, SpinCorrNet):
+        raise ValueError("density_fit in this workflow requires a SpinCorrNet checkpoint")
+    reference = build_reference(molecule, family, scf_args=scf_args, verbose=verbose, density_fit=density_fit)
     if isinstance(model, SpinCorrNet):
-        if not energy_only:
-            raise ValueError("SpinCorrNet supports energy-only inference")
         if projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
             raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
         correction = model.to(device).eval().correction_energy(reference)
-        return {"converged": np.asarray(True), "e_base": np.asarray(reference.e_tot),
-                "e_corr": np.asarray(correction), "e_tot": np.asarray(reference.e_tot + correction)}
+        result = {"converged": np.asarray(True), "e_base": np.asarray(reference.e_tot),
+                  "e_corr": np.asarray(correction), "e_tot": np.asarray(reference.e_tot + correction)}
+        if not energy_only:
+            method = make_deephf(reference, model, projector_basis=projector_basis, device=device,
+                                 response_options=response_options, adjoint_options=adjoint_options)
+            gradient = method.gradient(backend=backend)
+            result.update(descriptor=method.descriptor(), gradient=gradient, force=-gradient)
+        return result
     method = make_deephf(
         reference,
         model,
@@ -169,18 +189,17 @@ def main(
     adjoint_options=None,
     verbose=0,
     energy_only=False,
+    density_fit=False,
 ):
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
         model = None
-    elif energy_only:
+    else:
         checkpoint = torch.load(model_file, map_location="cpu", weights_only=True)
         if checkpoint.get("format") in SpinCorrNet.CHECKPOINT_FORMATS:
             model = SpinCorrNet.load_dict(checkpoint)
         else:
             model = CorrNet.load_dict(checkpoint, strict=True).double().eval()
-    else:
-        model = CorrNet.load(model_file, strict=True).double().eval()
     mol_args = {} if mol_args is None else dict(mol_args)
     outputs = []
     for system_path in load_sys_paths(systems):
@@ -207,6 +226,7 @@ def main(
                     adjoint_options=adjoint_options,
                     verbose=verbose,
                     energy_only=energy_only,
+                    density_fit=density_fit,
                 )
             )
         if not frames:

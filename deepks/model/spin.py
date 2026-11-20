@@ -21,7 +21,8 @@ class SpinCorrNet(torch.nn.Module):
     cutoff adds same-shell interatomic spin products to the even channels.
     """
 
-    CHECKPOINT_FORMATS = ("deepks.spin-energy.v1", "deepks.spin-energy.v2")
+    NO_LABEL_FORMAT = "qm9-ie.no-nominal-spin.v1"
+    CHECKPOINT_FORMATS = ("deepks.spin-energy.v1", "deepks.spin-energy.v2", NO_LABEL_FORMAT)
 
     def __init__(
         self,
@@ -29,6 +30,7 @@ class SpinCorrNet(torch.nn.Module):
         hidden_sizes=(64, 64),
         *,
         local_spin=True,
+        nominal_spin=True,
         elem_table=None,
         relative_cutoff_angstrom=None,
         mask_relative_spin=False,
@@ -39,15 +41,17 @@ class SpinCorrNet(torch.nn.Module):
         self.n_spin = len(shells)
         self.n_common = sum(shells) + 1
         self.local_spin = local_spin
+        self.nominal_spin = nominal_spin
         self.relative_cutoff_angstrom = relative_cutoff_angstrom
         self.mask_relative_spin = mask_relative_spin
         if relative_cutoff_angstrom is not None and (
             not local_spin
+            or not nominal_spin
             or not math.isfinite(relative_cutoff_angstrom)
             or relative_cutoff_angstrom <= 0
         ):
             raise ValueError(
-                "relative spin requires local spin and a finite positive cutoff"
+                "relative spin requires local spin, nominal spin and a finite positive cutoff"
             )
         if mask_relative_spin and relative_cutoff_angstrom is None:
             raise ValueError("mask_relative_spin requires a relative spin cutoff")
@@ -105,6 +109,9 @@ class SpinCorrNet(torch.nn.Module):
             [self.n_common, self.n_spin, self.network.input_dim - spin_end],
             dim=-1,
         )
+        if not self.nominal_spin:
+            common = torch.cat((common[..., :-1], torch.zeros_like(common[..., -1:])), dim=-1)
+            features = torch.cat((common, spin, relative), dim=-1)
         if not self.local_spin:
             return self.network(
                 torch.cat((common, torch.zeros_like(spin)), dim=-1), atom_mask
@@ -125,13 +132,8 @@ class SpinCorrNet(torch.nn.Module):
             self.prepare_features(features, positions, atom_mask), atom_mask
         )
 
-    @torch.no_grad()
-    def correction_energy(self, reference):
-        """Return the correction in Hartree for one converged, collinear RHF/UHF reference.
-
-        The caller supplies the same HF basis and reference convention used for
-        training. Restricted open-shell references require separate spin densities.
-        """
+    def state_features(self, reference):
+        """Build this checkpoint's projector and features for a converged collinear HF state."""
         if not isinstance(reference, (scf.hf.RHF, scf.uhf.UHF)) or hasattr(
             reference, "xc"
         ):
@@ -141,6 +143,12 @@ class SpinCorrNet(torch.nn.Module):
         descriptor = AtomicDensityDescriptor(reference.mol, self.network._pbas)
         ao_density = reference.make_rdm1()
         features = descriptor.spin_features(ao_density, reference.mol.spin)
+        return descriptor, features
+
+    @torch.no_grad()
+    def correction_energy(self, reference):
+        """Return the single-state correction in Hartree, including elemental offsets."""
+        descriptor, features = self.state_features(reference)
         positions = None
         if self.relative_cutoff_angstrom is not None:
             xyz = reference.mol.atom_coords(unit="Angstrom")
@@ -163,7 +171,7 @@ class SpinCorrNet(torch.nn.Module):
     def save(self, filename):
         """Write a versioned energy checkpoint including projector and offsets."""
         data = dict(
-            format=self.CHECKPOINT_FORMATS[0],
+            format=self.CHECKPOINT_FORMATS[0] if self.nominal_spin else self.NO_LABEL_FORMAT,
             local_spin=self.local_spin,
             network=self.network.save_dict(),
         )
@@ -193,6 +201,7 @@ class SpinCorrNet(torch.nn.Module):
             args["proj_basis"],
             args["hidden_sizes"],
             local_spin=data["local_spin"],
+            nominal_spin=data["format"] != cls.NO_LABEL_FORMAT,
             elem_table=args["elem_table"],
             relative_cutoff_angstrom=(
                 data["relative_cutoff_angstrom"] if has_relative else None
