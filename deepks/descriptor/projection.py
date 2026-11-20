@@ -156,6 +156,33 @@ class AtomicDensityDescriptor:
             self.overlap_shells,
         )
 
+    def spin_features(self, ao_density, spin: int) -> torch.Tensor:
+        """Project one collinear state into total features and signed shell traces.
+
+        A rank-two closed-shell density carries zero spin. A rank-three density
+        is ordered alpha, beta. Each shell trace is invariant to rotations of
+        its magnetic components and changes sign under a spin-label exchange.
+        """
+        if isinstance(ao_density, np.ndarray) and any(s < 0 for s in ao_density.strides):
+            # NumPy commonly represents an alpha/beta swap as a reversed view.
+            ao_density = ao_density.copy()
+        density = torch.as_tensor(ao_density)
+        if density.is_complex():
+            raise ValueError("spin features require a real collinear density")
+        density = density.to(self.overlap_shells[0])
+        if density.shape == (self.mol.nao, self.mol.nao) and spin == 0:
+            total = self.torch_descriptor(density)
+            traces = total.new_zeros((self.n_descriptor_atoms, len(self.shell_sizes)))
+        elif density.shape == (2, self.mol.nao, self.mol.nao):
+            total = self.torch_descriptor(density[0] + density[1])
+            blocks = self.torch_projected_density(density[0] - density[1])
+            traces = torch.stack([b.diagonal(dim1=-2, dim2=-1).sum(-1)
+                                  for b in blocks], dim=-1)
+        else:
+            raise ValueError("expected a closed-shell AO matrix or two spin channels")
+        global_spin = total.new_full((self.n_descriptor_atoms, 1), abs(spin))
+        return torch.cat((total, global_spin, traces), dim=-1)
+
     def descriptor(self, ao_density) -> np.ndarray:
         return self.torch_descriptor(ao_density).detach().cpu().numpy()
 

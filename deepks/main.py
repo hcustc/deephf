@@ -201,6 +201,8 @@ def deephf_cli(args=None):
                         help="native reference family")
     parser.add_argument("-m", "--model-file",
                         help="CorrNet checkpoint or NONE for a zero correction")
+    parser.add_argument("--energy-only", action="store_true",
+                        help="evaluate single-state energies without gradients")
     parser.add_argument("-b", "--backend", choices=("direct", "zvector"),
                         help="analytic-gradient backend")
     parser.add_argument("-B", "--basis", help="AO basis")

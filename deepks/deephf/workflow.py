@@ -3,11 +3,13 @@
 import os
 
 import numpy as np
+import torch
 from pyscf import dft, scf
 
 from deepks.data.io import build_molecule, dump_data, iter_system
 from deepks.model.model import CorrNet
-from deepks.utils import get_sys_name, load_sys_paths
+from deepks.model.spin import SpinCorrNet
+from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
 from .method import DeePHF
 from .rks_method import RKSDeePHF
@@ -25,6 +27,8 @@ REFERENCE_FAMILIES = frozenset(("rhf", "uhf", "rks", "uks"))
 
 def make_deephf(reference, model, *, projector_basis=None, device="cpu", response_options=None, adjoint_options=None):
     """Construct the exact public DeePHF method matching a native reference."""
+    if isinstance(model, SpinCorrNet):
+        raise ValueError("SpinCorrNet supports energy-only inference")
     method_class = METHOD_CLASSES.get(type(reference))
     if method_class is None:
         raise TypeError("the reference type has no strict DeePHF method")
@@ -106,9 +110,18 @@ def evaluate_molecule(
     response_options=None,
     adjoint_options=None,
     verbose=0,
+    energy_only=False,
 ):
-    """Evaluate energy, descriptor, gradient, and force through one public backend."""
+    """Evaluate one state, optionally omitting derivative and descriptor outputs."""
     reference = build_reference(molecule, family, scf_args=scf_args, verbose=verbose)
+    if isinstance(model, SpinCorrNet):
+        if not energy_only:
+            raise ValueError("SpinCorrNet supports energy-only inference")
+        if projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
+            raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
+        correction = model.to(device).eval().correction_energy(reference)
+        return {"converged": np.asarray(True), "e_base": np.asarray(reference.e_tot),
+                "e_corr": np.asarray(correction), "e_tot": np.asarray(reference.e_tot + correction)}
     method = make_deephf(
         reference,
         model,
@@ -119,6 +132,9 @@ def evaluate_molecule(
     )
     with method._controlled_calculation():
         energy = float(method.kernel())
+        if energy_only:
+            return {"converged": np.asarray(True), "e_base": np.asarray(method.e_base),
+                    "e_corr": np.asarray(method.e_corr), "e_tot": np.asarray(energy)}
         gradient_driver = method.nuc_grad_method(
             backend=backend,
             retain_details=False,
@@ -152,10 +168,17 @@ def main(
     response_options=None,
     adjoint_options=None,
     verbose=0,
+    energy_only=False,
 ):
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
         model = None
+    elif energy_only:
+        checkpoint = torch.load(model_file, map_location="cpu", weights_only=True)
+        if checkpoint.get("format") in SpinCorrNet.CHECKPOINT_FORMATS:
+            model = SpinCorrNet.load_dict(checkpoint)
+        else:
+            model = CorrNet.load_dict(checkpoint, strict=True).double().eval()
     else:
         model = CorrNet.load(model_file, strict=True).double().eval()
     mol_args = {} if mol_args is None else dict(mol_args)
@@ -183,12 +206,16 @@ def main(
                     response_options=response_options,
                     adjoint_options=adjoint_options,
                     verbose=verbose,
+                    energy_only=energy_only,
                 )
             )
         if not frames:
             raise ValueError(f"system {system_path!r} contains no molecular frames")
         collected = {name: np.asarray([frame[name] for frame in frames]) for name in frames[0]}
         output_directory = os.path.join(dump_dir, get_sys_name(system_path))
+        if energy_only:
+            # Keep earlier gradient files from being associated with new energies.
+            output_directory = os.path.join(output_directory, "energy_only")
         dump_data(output_directory, **collected)
         outputs.append((output_directory, collected))
     return outputs

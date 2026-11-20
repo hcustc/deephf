@@ -55,6 +55,41 @@ The self-consistent DeePKS package retains neural-network energy correction, SCF
 - Saved-data testing evaluates compatible energy and force datasets.
 - Iteration and task utilities support local and SSH-based project workflows.
 
+### Spin-resolved single-state energies
+
+`deepks.model.SpinCorrNet` predicts a correction in Hartree for one converged
+RHF or UHF state. It combines projected total-density eigenvalues, the global
+absolute spin population difference, and signed traces of the projected
+alpha-minus-beta density in each atomic shell. A shared atomic network averages
+the two spin labelings. Use `local_spin=False` for a parameter-matched control.
+
+```python
+from deepks.model import SpinCorrNet
+
+model = SpinCorrNet.load("spin.pth")
+energy = model.total_energy(reference)  # match the HF setup used to train this checkpoint
+```
+
+For supervised PyTorch training, use
+`AtomicDensityDescriptor(mol, basis).spin_features(reference.make_rdm1(), mol.spin)`
+as the input to `model(features)`. The target is the per-state reference energy
+minus HF energy, with any fitted elemental offsets also subtracted. Set the
+same projector basis when constructing the model. Save with `model.save(path)`.
+Set `relative_cutoff_angstrom=4.0` to append a distance-weighted sum of
+same-shell spin products with other atoms. The cosine weight decreases from
+one to zero at the cutoff. Call `model(features, positions, atom_mask)` with
+coordinates in Angstrom in descriptor atom order. The boolean padding mask is
+optional. For static HF data, cache `model.prepare_features(...)` on complete
+states and train with `model.forward_prepared(features, atom_mask)`.
+`mask_relative_spin=True` zeros the added channels for a matched control.
+Single-state inference reads coordinates from the reference. For a vertical
+spin gap, subtract the singlet corrected total energy from the triplet total.
+The file workflow accepts a spin checkpoint with `deepks deephf --energy-only`
+and writes the HF energy, correction, and total energy under each system’s
+`energy_only/` directory. This module supports
+energy training and inference. Analytic gradients require the existing
+force-compatible model family.
+
 ## Command-line interface
 
 The installed `deepks` command, also available as `dks`, provides these subcommands:

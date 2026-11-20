@@ -646,14 +646,16 @@ class CorrNet(nn.Module):
             requires_grad=False)
         self._checkpoint_extra_info = {}
     
-    def forward(self, x):
-        # x: nframes x natom x nfeature
+    def forward(self, x, atom_mask=None):
+        # Apply padding only to atomic energies so the frame constant is added once.
         x = (x - self.input_shift) / (self.input_scale + SCALE_EPS)
         l = self.linear(x)
         if self.embedder is not None:
             x = self.embedder(x)
         y = self.densenet(x)
         y = y / self.output_scale + l
+        if atom_mask is not None:
+            y = y.masked_fill(~atom_mask.unsqueeze(-1), 0)
         e = y.sum(-2) + self.energy_const
         return e
     
