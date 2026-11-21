@@ -6,13 +6,14 @@ import torch
 from pyscf import gto
 
 import deepks.model.model as model_module
-from deepks.deephf import DeePHF, build_reference
+from deepks.deephf import DeePHF
 from deepks.deephf.capabilities import DeePHFCapabilityError
 from deepks.model.model import (
     CorrNet,
     model_execution_state_evidence,
     model_execution_state_fingerprint,
 )
+from tests.reference_utils import build_cpu_reference as build_reference
 
 
 PROJECTOR_BASIS = [[0, [0.8, 1.0]]]
@@ -144,12 +145,11 @@ def test_data_parameter_mutation_fails_at_public_reuse_boundary(method):
     )
 
 
-def test_numpy_alias_buffer_mutation_fails_at_public_reuse_boundary():
+def test_data_buffer_mutation_fails_at_public_reuse_boundary():
     method = _thermal_method()
 
     def mutate_running_variance(model):
-        shared = model.embedder.running_var.detach().numpy()
-        shared[...] = 4.0
+        model.embedder.running_var.data.fill_(4.0)
 
     _assert_untracked_value_mutation_rejected(method, mutate_running_variance)
 

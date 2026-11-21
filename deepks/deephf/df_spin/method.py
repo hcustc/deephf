@@ -12,6 +12,40 @@ from .integrals import DFFockDerivative, auxiliary_molecule
 from .orbitals import DFOrbitalResponse
 
 
+def build_spin_reference(
+    molecule, family, *, density_fit, scf_args=None, dft_args=None, dm0=None, verbose=0
+):
+    """Converge the native PySCF HF root consumed by spin checkpoints."""
+    if not isinstance(family, str) or family.lower() not in {"rhf", "uhf"} or dft_args is not None:
+        raise ValueError("spin checkpoints require an RHF or UHF reference without DFT controls")
+    family = family.lower()
+    if family == "rhf" and molecule.spin != 0:
+        raise ValueError("the strict RHF family requires molecular spin zero")
+    reference = scf.RHF(molecule) if family == "rhf" else scf.UHF(molecule)
+    expected_type = scf.hf.RHF if family == "rhf" else scf.uhf.UHF
+    if type(reference) is not expected_type:
+        raise TypeError(f"the requested {family.upper()} constructor returned {type(reference).__name__}")
+    if density_fit:
+        reference = reference.density_fit()
+    controls = {
+        "conv_tol": 1e-12 if density_fit else 1e-13,
+        "conv_tol_grad": 1e-8 if density_fit else 1e-10,
+        "conv_tol_cpscf": 1e-12,
+        "max_cycle": 100,
+    }
+    if scf_args is not None:
+        supported = controls.keys() | {"diis_space", "level_shift", "direct_scf", "conv_check"}
+        unknown = sorted(set(scf_args) - supported)
+        if unknown:
+            raise ValueError("unsupported strict reference controls: " + ", ".join(unknown))
+        controls.update(scf_args)
+    reference.set(verbose=verbose, **controls)
+    reference.kernel(dm0=dm0)
+    if not reference.converged:
+        raise RuntimeError(f"the native {family.upper()} reference did not converge")
+    return reference
+
+
 def _validate_reference(reference):
     """Require the physical canonical orbitals of a full-JK molecular DF root."""
     if (
@@ -125,7 +159,7 @@ class DFSpinDeePHF:
 
     def _descriptors(self):
         ref = self.reference
-        return AtomicDensityDescriptor(ref.mol, self.model.network._pbas)
+        return AtomicDensityDescriptor(ref.mol, self.model.network._pbas, device="cpu")
 
     def descriptor(self):
         """Return the raw single-state spin features in descriptor-atom order."""

@@ -140,7 +140,7 @@ class SpinCorrNet(torch.nn.Module):
             raise TypeError("SpinCorrNet expects a collinear HF reference")
         if not reference.converged:
             raise ValueError("the single-state reference must be converged")
-        descriptor = AtomicDensityDescriptor(reference.mol, self.network._pbas)
+        descriptor = AtomicDensityDescriptor(reference.mol, self.network._pbas, device="cpu")
         ao_density = reference.make_rdm1()
         features = descriptor.spin_features(ao_density, reference.mol.spin)
         return descriptor, features

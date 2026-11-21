@@ -8,6 +8,7 @@ from .adjoint import (
     scalar_operator_fingerprint,
     solve_scalar_adjoint,
 )
+from .ase import DeePHFCalculator
 
 from .capabilities import (
     DeePHFCapabilityError,
@@ -15,11 +16,31 @@ from .capabilities import (
     validate_model,
     validate_model_output,
 )
+from .df_spin import (
+    DFSpinDeePHF,
+    SpinForceFrame,
+    SpinTrainingState,
+    device_df_jk,
+    spin_energy_force_loss,
+)
 from .gradient import (
     RHFDeePHFGradients,
     RKSDeePHFGradients,
     UHFDeePHFGradients,
     UKSDeePHFGradients,
+)
+from .gpu_method import (
+    GPUDeePHF,
+    GPUDeePHFGradients,
+    GPURKSDeePHF,
+    GPUUHFDeePHF,
+    GPUUKSDeePHF,
+)
+from .gpu_scanner import (
+    GPUDeePHFFiniteDifferenceScanner,
+    GPUDeePHFGradientScanner,
+    GPUDeePHFScannerError,
+    GPUUHFDeePHFGradientScanner,
 )
 from .force_data import (
     RHFForceDataError,
@@ -44,6 +65,7 @@ from .pyscf_rhf import (
     validate_reference,
 )
 from .scanner import RHFDeePHFGradientScanner, RHFDeePHFScannerError
+from .contracts import RootContinuityError
 from .unrestricted_method import UHFDeePHF, UKSDeePHF
 from .pyscf_uhf import (
     UHFAdjoint,
@@ -87,7 +109,6 @@ from .zvector import (
     UHFDeePHFZVectorGradients,
     UKSDeePHFZVectorGradients,
 )
-from .df_spin import DFSpinDeePHF, SpinForceFrame, SpinTrainingState, device_df_jk, spin_energy_force_loss
 from .workflow import build_reference, evaluate_molecule, make_deephf
 
 __all__ = [
@@ -97,7 +118,17 @@ __all__ = [
     "SpinTrainingState",
     "spin_energy_force_loss",
     "device_df_jk",
+    "DeePHFCalculator",
     "DeePHFCapabilityError",
+    "GPUDeePHF",
+    "GPUDeePHFFiniteDifferenceScanner",
+    "GPUDeePHFGradients",
+    "GPUDeePHFGradientScanner",
+    "GPUDeePHFScannerError",
+    "GPURKSDeePHF",
+    "GPUUHFDeePHF",
+    "GPUUHFDeePHFGradientScanner",
+    "GPUUKSDeePHF",
     "AdjointDiagnostics",
     "AdjointError",
     "AdjointResult",
@@ -119,6 +150,7 @@ __all__ = [
     "RHFRootSnapshot",
     "RHFScannerReferenceError",
     "RHFScannerReferenceFactory",
+    "RootContinuityError",
     "RKSDeePHF",
     "RKSDeePHFGradients",
     "RKSDeePHFZVectorGradients",

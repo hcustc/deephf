@@ -108,7 +108,7 @@ def test_relative_checkpoint_separate_states(tmp_path, masked):
             verbose=0,
         )
         ref = (scf.UHF(mol) if spin else scf.RHF(mol)).run()
-        desc = AtomicDensityDescriptor(mol, BASIS)
+        desc = AtomicDensityDescriptor(mol, BASIS, device="cpu")
         x = desc.spin_features(ref.make_rdm1(), spin)
         xyz = torch.from_numpy(mol.atom_coords(unit="Angstrom")[[0, 2]])
         expected = ref.e_tot + model(x, xyz).item() - 0.06
