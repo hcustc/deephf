@@ -179,6 +179,14 @@ the integral derivatives and contracting the orbital probes. The two
 `get_veff` counters are nested subsets of transport and stationarity,
 respectively. They exclude SCF iterations and the off-clock residual check.
 
+The archived JSON files retain the individual measurements and force vectors.
+Their script hashes can be checked against the files at commit `17867a16`.
+The original reuse report predates runtime metadata. New reuse reports record
+the UTC start time, platform, Python version and numerical package versions.
+GitHub collapses these generated measurements in the diff. In each profile,
+`max_abs_difference_from_plain` compares all runs, including later plain
+repeats, against the first plain run on the corresponding frames.
+
 ### Apple M4, one CPU thread
 
 The [PySCF measurements](acetonitrile_pyscf.json) used PySCF 2.14.0 and

@@ -9,13 +9,26 @@ import subprocess
 from unittest.mock import patch
 
 import numpy as np
-from pyscf import lib
+from pyscf import lib, scf
 import torch
 
 from deepks.deephf.backends.hf import HFState
 from deepks.deephf.df_spin import method
 from deepks.model import SpinCorrNet
 from . import profile_forces as profile
+
+
+def _packed_factors(ref, mol, dm):
+    """Select only the full-JK, real spin density and packed DF layout used in the bound."""
+    if (not isinstance(ref, scf.uhf.UHF) or mol is not ref.mol or mol.omega
+            or getattr(ref, "only_dfj", False) or np.shape(dm) != (2, mol.nao, mol.nao)
+            or np.iscomplexobj(dm)):
+        return None
+    factors = getattr(getattr(ref, "with_df", None), "_cderi", None)
+    if (isinstance(factors, np.ndarray) and factors.dtype == np.float64
+            and factors.ndim == 2 and factors.shape[1] == mol.nao * (mol.nao + 1) // 2):
+        return factors
+    return None
 
 
 class OneFrameTrial:
@@ -40,12 +53,12 @@ class OneFrameTrial:
             self.witness = None
             fresh = ref.get_veff
 
-            def build(mol, dm):
-                veff = fresh(mol, dm)
-                factors = ref.with_df._cderi
-                # The proof below covers real in-memory, packed three-centre factors.
-                if isinstance(factors, np.ndarray) and factors.dtype == np.float64 and factors.ndim == 2:
-                    self.witness = (ref, mol, dm.copy(), veff.copy(), factors.copy())
+            def build(mol=None, dm=None, *args, **kwargs):
+                veff = fresh(mol, dm, *args, **kwargs)
+                if not args and not kwargs:
+                    factors = _packed_factors(ref, mol, dm)
+                    if factors is not None:
+                        self.witness = (ref, mol, np.array(dm), veff.copy(), factors.copy())
                 return veff
 
             try:
@@ -62,10 +75,10 @@ class OneFrameTrial:
             _, source_mol, source_dm, veff, factors = witness
             fresh = ref.get_veff
 
-            def reuse(mol, dm):
-                if (mol is not source_mol or mol.omega or dm.shape != source_dm.shape
-                        or not np.array_equal(ref.with_df._cderi, factors)):
-                    return fresh(mol, dm)
+            def reuse(mol=None, dm=None, *args, **kwargs):
+                if (args or kwargs or mol is not source_mol
+                        or not np.array_equal(_packed_factors(ref, mol, dm), factors)):
+                    return fresh(mol, dm, *args, **kwargs)
                 # For V_s=J[D_a+D_b]-K[D_s], both linear maps have Frobenius
                 # operator norm <= sum_P ||B_P||_F^2. Twice the packed norm
                 # bounds that sum. Multiply by max column norm of C to bound
@@ -110,6 +123,7 @@ def main():
     model = SpinCorrNet.load(profile.CHECKPOINT).eval()
     controls = {"max_cycle": 300, "conv_tol": 1e-12, "diis_space": 48}
     report = {
+        **profile.runtime_metadata(args.engine),
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=profile.ROOT, text=True).strip(),
         "trial_sha256": sha256(Path(__file__).read_bytes()).hexdigest(),
         "profile_sha256": sha256(Path(profile.__file__).read_bytes()).hexdigest(),

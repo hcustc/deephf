@@ -1,6 +1,7 @@
 """Check the scoped Fock experiment's acceptance and error paths on CPU."""
 
 from contextlib import nullcontext
+from unittest.mock import Mock
 
 import numpy as np
 from pyscf import gto, scf
@@ -57,3 +58,65 @@ def test_fock_witness_preserves_rejection(root, change, reuse):
         with pytest.raises(ValueError, match="canonical stationary"):
             method._validate_reference(ref)
         assert trial.hits == 0
+
+
+def test_valid_reference_near_residual_limit_uses_fresh_fock(root, monkeypatch):
+    state, new_reference = root
+    trial = OneFrameTrial()
+    with trial.enabled():
+        ref = state.response_reference(new_reference())
+        assert trial.witness is not None
+        # Put one column inside the production tolerance but outside the reuse margin.
+        sc = ref.get_ovlp() @ ref.mo_coeff[0, :, 0]
+        ref.mo_energy[0, 0] += 9.5e-8 / np.max(np.abs(sc))
+        dm = ref.make_rdm1()
+        physical = ref.get_hcore() + ref.get_veff(ref.mol, dm)
+        residual = physical @ ref.mo_coeff - (ref.get_ovlp() @ ref.mo_coeff) * ref.mo_energy[:, None, :]
+        assert 9e-8 < np.max(np.abs(residual)) < 1e-7
+
+        fresh = Mock(wraps=ref.get_veff)
+        monkeypatch.setattr(ref, "get_veff", fresh)
+        method._validate_reference(ref)
+        fresh.assert_called_once()
+        assert trial.hits == 0
+
+
+@pytest.mark.parametrize("df", [False, True])
+def test_rhf_transport_uses_original_fock(df):
+    mol = gto.M(atom="H 0 0 0; H 0 0 .74", basis="sto-3g", verbose=0)
+    ref = scf.RHF(mol)
+    if df:
+        ref = ref.density_fit()
+    ref.run()
+    trial = OneFrameTrial()
+    with trial.enabled():
+        HFState(ref.e_tot, ref.make_rdm1()).response_reference(ref)
+        assert trial.witness is None
+        if df:
+            method._validate_reference(ref)
+
+
+@pytest.mark.parametrize("extra_at", ["capture", "validation"])
+def test_incremental_fock_arguments_pass_through(root, monkeypatch, extra_at):
+    state, new_reference = root
+    ref = new_reference()
+    fresh = Mock(wraps=ref.get_veff)
+    monkeypatch.setattr(ref, "get_veff", fresh)
+
+    def invoke():
+        # Exercise PySCF's optional positional dm_last and keyword hermi.
+        return ref.get_veff(ref.mol, state.density, 0, hermi=1)
+
+    if extra_at == "capture":
+        monkeypatch.setattr(HFState, "response_reference", lambda *_: invoke())
+    else:
+        monkeypatch.setattr(method, "_validate_reference", lambda _: invoke())
+    trial = OneFrameTrial()
+    with trial.enabled():
+        state.response_reference(ref)
+        if extra_at == "validation":
+            assert trial.witness is not None
+            method._validate_reference(ref)
+        assert trial.witness is None
+        assert trial.hits == 0
+        fresh.assert_called_with(ref.mol, state.density, 0, hermi=1)

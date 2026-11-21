@@ -1,1 +1,3 @@
 .git_archival.txt  export-subst
+validation/hf_backends/acetonitrile_*.json linguist-generated=true
+validation/hf_backends/acetonitrile_n1/*.json linguist-generated=true

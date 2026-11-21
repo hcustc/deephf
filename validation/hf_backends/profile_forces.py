@@ -118,11 +118,12 @@ class Timers:
             (method.DFFockDerivative, "__init__", "df_fock_derivative"),
             (method.DFFockDerivative, "contract", "df_fock_derivative"),
         )
+        # PySCF 2.14 DF-UHF overrides get_jk and inherits UHF.get_veff.
         original = scf.uhf.UHF.get_veff
 
         @wraps(original)
         def get_veff(ref, mol=None, dm=None, *args, **kwargs):
-            site = self.stack[-1]
+            site = self.stack[-1] if self.stack else None
             if site not in self.veff:
                 return original(ref, mol, dm, *args, **kwargs)
             self.sync()
@@ -211,6 +212,23 @@ def run(args, model, symbols, frames, controls, profiled, sync, first_seed):
     return rows, None
 
 
+def runtime_metadata(engine):
+    """Record comparable runtime provenance for baseline and reuse measurements."""
+    packages = ["pyscf", "torch", "numpy", "scipy"]
+    if engine == "gpu4pyscf":
+        packages.append("gpu4pyscf-cuda12x")
+    elif engine == "generativeqc":
+        packages.append("generativeqc")
+    versions = {}
+    for name in packages:
+        try:
+            versions[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            versions[name] = "no installed distribution metadata"
+    return {"started_utc": datetime.now(timezone.utc).isoformat(),
+            "platform": platform.platform(), "python": platform.python_version(), "versions": versions}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("engine", choices=("pyscf", "gpu4pyscf", "generativeqc"))
@@ -243,25 +261,12 @@ def main():
         # The soft initial cation root stalls with the default DIIS history.
         controls["diis_space"] = 48
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    packages = ["pyscf", "torch", "numpy", "scipy"]
-    if args.engine == "gpu4pyscf":
-        packages.append("gpu4pyscf-cuda12x")
-    elif args.engine == "generativeqc":
-        packages.append("generativeqc")
-    versions = {}
-    for name in packages:
-        try:
-            versions[name] = metadata.version(name)
-        except metadata.PackageNotFoundError:
-            versions[name] = "no installed distribution metadata"
     cpu = platform.processor()
     if platform.system() == "Darwin":
         cpu = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip()
     report = {
         "commit": commit, "profile_sha256": sha256(Path(__file__).read_bytes()).hexdigest(),
-        "started_utc": datetime.now(timezone.utc).isoformat(),
-        "platform": platform.platform(), "cpu": cpu, "versions": versions,
-        "python": platform.python_version(), "engine": args.engine,
+        **runtime_metadata(args.engine), "cpu": cpu, "engine": args.engine,
         "scf_device": args.scf_device, "response_device": args.device, "backend": "zvector",
         "cuda_device": torch.cuda.get_device_name() if use_cuda else None,
         "cuda_available": torch.cuda.is_available(),
