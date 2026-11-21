@@ -205,7 +205,7 @@ all force components and root checks are in the JSON.
 
 The three plain medians per accepted geometry were 712.5, 505.5 and 540.3
 ms, following an initial-frame median of 970.7 ms. The four SCF cycle counts
-were 100, 76, 36 and 42. All profiled runs reproduced the plain HF energy,
+were 100, 76, 35 and 40. All profiled runs reproduced the plain HF energy,
 corrected energy and all 18 force components on every frame exactly. The
 largest canonical residual was 2.39e−9, and the smallest adjacent occupied
 overlap was 0.94055. PySCF made zero transport-site and one validation-site
@@ -244,6 +244,9 @@ contractions. The HF nuclear gradient and DF integral derivatives use PySCF on C
 | [GenerativeQC CUDA, anchored](acetonitrile_n1/generativeqc_cuda_anchored.json) | CPU | 1374.5 | 1089.2 | 1089.9 | 49.40 | 5.34 |
 | [GenerativeQC CUDA, anchored](acetonitrile_n1/generativeqc_cuda_response_anchored.json) | CUDA | 1158.0 | 818.8 | 823.4 | 53.23 | 5.39 |
 
+Native PySCF took 278, 76, 36 and 41 SCF cycles on Linux. The server
+GenerativeQC library reported native source identity
+`3b31877336dd65af68a072e89d993f244138aa6e53dc455b8d33b3cb954697cc`.
 The [independent GenerativeQC CUDA run](acetonitrile_n1/generativeqc_cuda.json)
 selected the same higher-energy first root as the Mac CPU build. The anchored
 run reached all four archived geometries. Its first-frame wall time excludes
@@ -295,3 +298,8 @@ The median paired saving was 27.7 ms, with individual differences from a
 the median saving was 16.1 ms combined and the mean was a 9.6 ms slowdown.
 These timings resolve the saved Fock call. Whole-step savings vary with the
 replay, so the guarded implementation remains a validation experiment.
+
+Server job 19129 passed all 1,049 tests on the baseline code, including the
+72 selected HF-backend and DF-spin-force tests run first. Job 19130 separately
+passed all seven new witness tests on the trial code. On macOS the full
+baseline suite stopped during collection in six modules requiring GPU4PySCF.
