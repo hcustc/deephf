@@ -60,8 +60,10 @@ energy, density and orbital stationarity without another SCF solve. The
 optional `generativeqc-zvector` algorithm evaluates the J/K action in the
 orbital adjoint with GenerativeQC. Its FockPlan accepts orbital and auxiliary
 shells through f. For def2-SVP calculations whose JK fitting basis contains g
-shells, use `zvector`. Projection and nuclear integral derivatives still use
+shells, the error reports the maximum angular momenta and directs you to `--backend zvector`. Projection and nuclear integral derivatives still use
 PySCF. See the [numerical checks and timings](validation/hf_backends/README.md).
+
+On single def2-SVP water clusters with fresh default SCF guesses, a 16-thread AMD EPYC 9354 PySCF run took 0.126 s at 96 AOs, compared with 0.220 s for GenerativeQC and 0.315 s for GPU4PySCF on an RTX 5090. At 192 AOs, GPU4PySCF took 0.563 s, 16-thread PySCF 0.754 s, and GenerativeQC 1.023 s. These are median end-to-end energy prediction times after initialization.
 
 For a multi-root system, the Python APIs `build_hf_state`, `build_reference` and
 `evaluate_molecule` accept `initial_reference`, a converged RHF/UHF reference
