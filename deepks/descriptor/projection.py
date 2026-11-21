@@ -62,13 +62,6 @@ def build_projector_molecule(mol, projector_basis):
     return projector_mol
 
 
-def _as_ao_density_tensor(ao_density, device=DEFAULT_CUDA_DEVICE) -> torch.Tensor:
-    tensor = torch_from_array(ao_density, device=device)
-    if tensor.ndim != 2 or tensor.shape[-1] != tensor.shape[-2]:
-        raise ValueError("ao_density must be a square rank-2 matrix")
-    return tensor
-
-
 class AtomicDensityDescriptor:
     """Shared projected-density descriptor bound to one PySCF molecule."""
 
@@ -91,13 +84,23 @@ class AtomicDensityDescriptor:
         self.mol = mol
         self.descriptor_atom_indices = descriptor_atom_indices(mol)
         self.projector_mol = build_projector_molecule(mol, self.projector_basis)
-        overlap = torch_from_array(self.projection_overlap(), device=self.device)
+        overlap = self._tensor(self.projection_overlap())
         self.overlap_shells = tuple(torch.split(overlap, self.shell_sizes, -1))
         self._derivative_overlap_shells = None
         return self
 
+    def _tensor(self, value):
+        # Native PySCF spin derivatives contract host AO integrals and densities.
+        # Conventional descriptors keep their CUDA runtime checks and DLPack path.
+        if torch.device(self.device or DEFAULT_CUDA_DEVICE).type == "cpu":
+            return torch.as_tensor(value, dtype=torch.float64, device=self.device)
+        return torch_from_array(value, device=self.device)
+
     def as_ao_density_tensor(self, ao_density) -> torch.Tensor:
-        return _as_ao_density_tensor(ao_density, self.device)
+        tensor = self._tensor(ao_density)
+        if tensor.ndim != 2 or tensor.shape[-1] != tensor.shape[-2]:
+            raise ValueError("ao_density must be a square rank-2 matrix")
+        return tensor
 
     def cross_integral(self, integral: str) -> np.ndarray:
         return gto.intor_cross(integral, self.mol, self.projector_mol)
@@ -113,10 +116,7 @@ class AtomicDensityDescriptor:
     def derivative_overlap_shells(self) -> tuple[torch.Tensor, ...]:
         if self._derivative_overlap_shells is not None:
             return self._derivative_overlap_shells
-        derivative_overlap = torch_from_array(
-            self.cross_integral("int1e_ipovlp"),
-            device=self.device,
-        )
+        derivative_overlap = self._tensor(self.cross_integral("int1e_ipovlp"))
         derivative_overlap = derivative_overlap.reshape(
             3,
             self.mol.nao,
@@ -158,6 +158,33 @@ class AtomicDensityDescriptor:
             self.as_ao_density_tensor(ao_density),
             self.overlap_shells,
         )
+
+    def spin_features(self, ao_density, spin: int) -> torch.Tensor:
+        """Project one collinear state into total features and signed shell traces.
+
+        A rank-two closed-shell density carries zero spin. A rank-three density
+        is ordered alpha, beta. Each shell trace is invariant to rotations of
+        its magnetic components and changes sign under a spin-label exchange.
+        """
+        if isinstance(ao_density, np.ndarray) and any(s < 0 for s in ao_density.strides):
+            # NumPy commonly represents an alpha/beta swap as a reversed view.
+            ao_density = ao_density.copy()
+        density = torch.as_tensor(ao_density)
+        if density.is_complex():
+            raise ValueError("spin features require a real collinear density")
+        density = density.to(self.overlap_shells[0])
+        if density.shape == (self.mol.nao, self.mol.nao) and spin == 0:
+            total = self.torch_descriptor(density)
+            traces = total.new_zeros((self.n_descriptor_atoms, len(self.shell_sizes)))
+        elif density.shape == (2, self.mol.nao, self.mol.nao):
+            total = self.torch_descriptor(density[0] + density[1])
+            blocks = self.torch_projected_density(density[0] - density[1])
+            traces = torch.stack([b.diagonal(dim1=-2, dim2=-1).sum(-1)
+                                  for b in blocks], dim=-1)
+        else:
+            raise ValueError("expected a closed-shell AO matrix or two spin channels")
+        global_spin = total.new_full((self.n_descriptor_atoms, 1), abs(spin))
+        return torch.cat((total, global_spin, traces), dim=-1)
 
     def descriptor(self, ao_density) -> np.ndarray:
         return self.torch_descriptor(ao_density).detach().cpu().numpy()

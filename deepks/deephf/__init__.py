@@ -16,6 +16,13 @@ from .capabilities import (
     validate_model,
     validate_model_output,
 )
+from .df_spin import (
+    DFSpinDeePHF,
+    SpinForceFrame,
+    SpinTrainingState,
+    device_df_jk,
+    spin_energy_force_loss,
+)
 from .gradient import (
     RHFDeePHFGradients,
     RKSDeePHFGradients,
@@ -106,6 +113,11 @@ from .workflow import build_reference, evaluate_molecule, make_deephf
 
 __all__ = [
     "DeePHF",
+    "DFSpinDeePHF",
+    "SpinForceFrame",
+    "SpinTrainingState",
+    "spin_energy_force_loss",
+    "device_df_jk",
     "DeePHFCalculator",
     "DeePHFCapabilityError",
     "GPUDeePHF",

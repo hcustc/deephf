@@ -200,7 +200,11 @@ def deephf_cli(args=None):
     parser.add_argument("-r", "--reference", choices=("rhf", "uhf", "rks", "uks"),
                         help="native reference family")
     parser.add_argument("-m", "--model-file",
-                        help="CorrNet checkpoint or NONE for a zero correction")
+                        help="CorrNet or SpinCorrNet checkpoint, or NONE for a zero correction")
+    parser.add_argument("--density-fit", action="store_true",
+                        help="use DF J and K for a single-state spin checkpoint")
+    parser.add_argument("--energy-only", action="store_true",
+                        help="evaluate single-state energies without gradients")
     parser.add_argument("-b", "--backend", choices=("direct", "zvector"),
                         help="analytic-gradient backend")
     parser.add_argument("-B", "--basis", help="AO basis")

@@ -7,6 +7,9 @@ __all__ = [
 
 def __getattr__(name):
     from importlib import import_module
+    if name == "SpinCorrNet":
+        from .spin import SpinCorrNet
+        return SpinCorrNet
     if name == "CorrNet":
         from .model import CorrNet
         return CorrNet

@@ -1,11 +1,13 @@
 """Public construction and inference workflow for strict DeePHF methods."""
 
 from collections.abc import Mapping
+from functools import partial
 import json
 import os
 from pathlib import Path
 
 import numpy as np
+import torch
 from pyscf import dft, scf
 
 from deepks.data.io import build_molecule, dump_data, iter_system
@@ -16,8 +18,10 @@ from deepks.gpu import (
     require_cuda_device,
 )
 from deepks.model.model import CorrNet
-from deepks.utils import get_sys_name, load_sys_paths
+from deepks.model.spin import SpinCorrNet
+from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
+from .df_spin.method import DFSpinDeePHF, build_spin_reference
 from .method import DeePHF
 from .contracts import (
     RootContinuityError,
@@ -115,16 +119,26 @@ def _configure_gpu_dft(reference, molecule, dft_args) -> dict:
     return controls
 
 
+def _check_spin_projector(model, projector_basis):
+    if projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
+        raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
+
+
 def make_deephf(
     reference,
     model,
     *,
     projector_basis=None,
-    device=DEFAULT_CUDA_DEVICE,
+    device=None,
     response_options=None,
     adjoint_options=None,
 ):
     """Construct the exact public DeePHF method matching a native reference."""
+    if isinstance(model, SpinCorrNet):
+        _check_spin_projector(model, projector_basis)
+        if response_options or adjoint_options:
+            raise ValueError("custom response options are unsupported for spin gradients")
+        return DFSpinDeePHF(reference, model, device="cpu" if device is None else device)
     family = gpu_reference_family(reference)
     method_class = (
         GPU_METHOD_CLASSES.get(family)
@@ -139,10 +153,20 @@ def make_deephf(
         reference,
         model,
         projector_basis=projector_basis,
-        device=device,
+        device=DEFAULT_CUDA_DEVICE if device is None else device,
         response_options=response_options,
         adjoint_options=adjoint_options,
     )
+
+
+def _reference_builder(model, density_fit, energy_only):
+    if isinstance(model, SpinCorrNet):
+        if not energy_only and not density_fit:
+            raise ValueError("spin forces require density_fit=True (--density-fit)")
+        return partial(build_spin_reference, density_fit=density_fit)
+    if density_fit:
+        raise ValueError("density_fit in this workflow requires a SpinCorrNet checkpoint")
+    return build_reference
 
 
 def build_reference(
@@ -153,8 +177,14 @@ def build_reference(
     dft_args=None,
     dm0=None,
     verbose=0,
+    density_fit=False,
 ):
-    """Converge one GPU4PySCF reference and return its strict PySCF state."""
+    """Converge a GPU4PySCF reference or an explicit native DF-HF spin root."""
+    if density_fit:
+        return build_spin_reference(
+            molecule, family, density_fit=True, scf_args=scf_args,
+            dft_args=dft_args, dm0=dm0, verbose=verbose,
+        )
     require_cuda_device()
     import cupy
     from gpu4pyscf import dft as gpu_dft
@@ -266,15 +296,18 @@ def evaluate_molecule(
     family,
     backend="direct",
     projector_basis=None,
-    device=DEFAULT_CUDA_DEVICE,
+    device=None,
     scf_args=None,
     dft_args=None,
     response_options=None,
     adjoint_options=None,
     verbose=0,
+    energy_only=False,
+    density_fit=False,
 ):
-    """Evaluate energy, descriptor, gradient, and force through one public backend."""
-    reference = build_reference(
+    """Evaluate one state and optionally omit its descriptor and derivatives."""
+    build = _reference_builder(model, density_fit, energy_only)
+    reference = build(
         molecule,
         family,
         scf_args=scf_args,
@@ -289,6 +322,7 @@ def evaluate_molecule(
         device=device,
         response_options=response_options,
         adjoint_options=adjoint_options,
+        energy_only=energy_only,
     )
 
 
@@ -298,11 +332,30 @@ def _evaluate_reference(
     *,
     backend="direct",
     projector_basis=None,
-    device=DEFAULT_CUDA_DEVICE,
+    device=None,
     response_options=None,
     adjoint_options=None,
+    energy_only=False,
 ):
     """Evaluate one already converged native reference without rebuilding it."""
+    if isinstance(model, SpinCorrNet):
+        _check_spin_projector(model, projector_basis)
+        model.to("cpu" if device is None else device).eval()
+        correction = model.correction_energy(reference)
+        result = {
+            "converged": np.asarray(reference.converged),
+            "e_base": np.asarray(reference.e_tot),
+            "e_corr": np.asarray(correction),
+            "e_tot": np.asarray(reference.e_tot + correction),
+        }
+        if not energy_only:
+            method = make_deephf(
+                reference, model, device=device, response_options=response_options,
+                adjoint_options=adjoint_options,
+            )
+            gradient = method._gradient_on_validated_root(backend)
+            result.update(descriptor=method.descriptor(), gradient=gradient, force=-gradient)
+        return result
     method = make_deephf(
         reference,
         model,
@@ -313,6 +366,13 @@ def _evaluate_reference(
     )
     with method._controlled_calculation():
         energy = float(method.kernel())
+        if energy_only:
+            return {
+                "converged": np.asarray(True),
+                "e_base": np.asarray(method.e_base),
+                "e_corr": np.asarray(method.e_corr),
+                "e_tot": np.asarray(energy),
+            }
         gradient_driver = method.nuc_grad_method(
             backend=backend,
             retain_details=False,
@@ -346,12 +406,17 @@ def _reference_state_fingerprint(reference) -> str:
         update_digest(digest, as_numpy(reference.mo_coeff))
         update_digest(digest, as_numpy(reference.mo_occ))
         return digest.hexdigest()
+    # Native DF wrappers retain the underlying RHF/UHF orbital layout. Hash the
+    # actual wrapper state so the recorded type and converged orbitals are kept.
+    reference_type = type(reference)
+    if getattr(reference, "with_df", None) is not None and hasattr(reference, "undo_df"):
+        reference_type = type(reference.undo_df())
     fingerprint = {
         scf.hf.RHF: reference_fingerprint,
         scf.uhf.UHF: uhf_reference_fingerprint,
         dft.rks.RKS: rks_reference_fingerprint,
         dft.uks.UKS: uks_reference_fingerprint,
-    }.get(type(reference))
+    }.get(reference_type)
     if fingerprint is None:
         raise TypeError("the reference type has no strict state fingerprint")
     return fingerprint(reference)
@@ -367,6 +432,7 @@ class _ReferenceSequence:
         scf_args=None,
         dft_args=None,
         root_overlap_tolerance=0.5,
+        build=None,
         verbose=0,
     ):
         if type(family) is not str or family.lower() not in REFERENCE_FAMILIES:
@@ -378,6 +444,7 @@ class _ReferenceSequence:
             root_overlap_tolerance,
             owner="trajectory",
         )
+        self._build_reference = build_reference if build is None else build
         self.verbose = verbose
         self._previous_reference = None
         self._system_fingerprint = None
@@ -397,7 +464,7 @@ class _ReferenceSequence:
             raise RootContinuityError(
                 "the molecular system or AO basis changed within one trajectory"
             )
-        reference = build_reference(
+        reference = self._build_reference(
             molecule,
             self.family,
             scf_args=self.scf_args,
@@ -522,7 +589,7 @@ def main(
     basis="sto-3g",
     projector_basis=None,
     backend="direct",
-    device=DEFAULT_CUDA_DEVICE,
+    device=None,
     dump_dir=".",
     mol_args=None,
     scf_args=None,
@@ -531,18 +598,26 @@ def main(
     adjoint_options=None,
     root_overlap_tolerance=0.5,
     verbose=0,
+    energy_only=False,
+    density_fit=False,
 ):
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
         model = None
     else:
-        model = CorrNet.load(model_file, strict=True).double().eval()
+        checkpoint = torch.load(model_file, map_location="cpu", weights_only=True)
+        if isinstance(checkpoint, Mapping) and checkpoint.get("format") in SpinCorrNet.CHECKPOINT_FORMATS:
+            model = SpinCorrNet.load_dict(checkpoint)
+        else:
+            model = CorrNet.load_dict(checkpoint, strict=True).double().eval()
+    build = _reference_builder(model, density_fit, energy_only)
     mol_args = {} if mol_args is None else dict(mol_args)
     outputs = []
     for system_path in load_sys_paths(systems):
         frames = []
         sequence = _ReferenceSequence(
             reference,
+            build=build,
             scf_args=scf_args,
             dft_args=dft_args,
             root_overlap_tolerance=root_overlap_tolerance,
@@ -567,12 +642,15 @@ def main(
                     device=device,
                     response_options=response_options,
                     adjoint_options=adjoint_options,
+                    energy_only=energy_only,
                 )
             )
         if not frames:
             raise ValueError(f"system {system_path!r} contains no molecular frames")
         collected = {name: np.asarray([frame[name] for frame in frames]) for name in frames[0]}
         output_directory = os.path.join(dump_dir, get_sys_name(system_path))
+        if energy_only:
+            output_directory = os.path.join(output_directory, "energy_only")
         provenance = {
             "schema": {
                 "id": "deepks.deephf.inference-provenance",

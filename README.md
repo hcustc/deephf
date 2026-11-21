@@ -55,6 +55,106 @@ The self-consistent DeePKS package runs RKS/UKS SCF and analytic gradients throu
 - Saved-data testing evaluates compatible energy and force datasets.
 - Iteration and task utilities stage local or SSH-backed workflows and submit every GPU calculation through Slurm.
 
+### Spin-resolved single-state energies and forces
+
+`deepks.model.SpinCorrNet` predicts a correction in Hartree for one converged
+RHF or UHF state. It combines projected total-density eigenvalues, the global
+absolute spin population difference, and signed traces of the projected
+alpha-minus-beta density in each atomic shell. A shared atomic network averages
+the two spin labelings. Set `nominal_spin=False` to zero the global spin
+input on every forward pass. With this setting, `local_spin=False` gives
+the total-density control (A) and `local_spin=True` adds the local traces (B).
+Both use the same network dimensions. `SpinCorrNet.load` also reads the
+archived `qm9-ie.no-nominal-spin.v1` format and preserves both masks.
+
+```python
+from deepks.model import SpinCorrNet
+
+model = SpinCorrNet.load("spin.pth")
+energy = model.total_energy(reference)  # match the HF setup used to train this checkpoint
+```
+
+For supervised PyTorch training, use
+`AtomicDensityDescriptor(mol, basis, device="cpu").spin_features(reference.make_rdm1(), mol.spin)`
+as the input to `model(features)`. The target is the per-state reference energy
+minus HF energy, with any fitted elemental offsets also subtracted. Set the
+same projector basis when constructing the model. Save with `model.save(path)`.
+Set `relative_cutoff_angstrom=4.0` to append a distance-weighted sum of
+same-shell spin products with other atoms. The cosine weight decreases from
+one to zero at the cutoff. Call `model(features, positions, atom_mask)` with
+coordinates in Angstrom in descriptor atom order. The boolean padding mask is
+optional. For static HF data, cache `model.prepare_features(...)` on complete
+states and train with `model.forward_prepared(features, atom_mask)`.
+`mask_relative_spin=True` zeros the added channels for a matched control.
+Single-state inference reads coordinates from the reference. For a vertical
+spin gap, subtract the singlet corrected total energy from the triplet total.
+The file workflow accepts a spin checkpoint with `deepks deephf --energy-only`
+and writes the HF energy, correction, and total energy under each system’s
+`energy_only/` directory. Add `--density-fit` for the DF-HF energy surface
+used by the QM9 A/B checkpoints.
+
+For forces, supply a converged, stationary, canonical molecular DF-RHF or
+DF-UHF root with a full-rank Coulomb fitting metric. Use the same AO basis,
+auxiliary basis and electronic branch as for energy inference.
+
+```python
+from deepks.deephf import make_deephf
+from deepks.model import SpinCorrNet
+
+model = SpinCorrNet.load("B.pth")
+method = make_deephf(df_reference, model)
+energy = method.kernel()                 # Hartree, with elemental offsets
+gradient = method.gradient()             # Hartree/Bohr, scalar Z-vector
+force = method.forces(backend="direct")  # Hartree/Bohr, relaxed Jacobian
+```
+
+The Z-vector path differentiates the local spin traces with respect to the
+two spin densities and the moving projectors, then solves the coupled DF-HF
+orbital adjoint using GMRES. The direct Jacobian used for force training stores a
+dense orbital Hessian with memory proportional to the square of the total
+number of occupied–virtual orbital pairs (summed over spin channels). Both backends include auxiliary-centre and
+Coulomb-metric motion. The implementation assumes an isolated stationary
+electronic branch. It rejects unresolved nonstructural eigenvalue crossings
+in the ordered total-density descriptor. Root stability requires a separate
+orbital-Hessian check. Checkpoints with a
+relative-spin cutoff currently support energy evaluation only.
+
+The CLI uses the same gradient through
+`deepks deephf --density-fit --reference uhf --model-file B.pth --basis def2-svp --backend zvector --systems cation.xyz`.
+Set the molecular charge and spin consistently in the input system or YAML
+configuration. The default device is CPU. With a CUDA-enabled PyTorch build,
+`make_deephf(..., device="cuda")` moves the neural network and orbital-response
+contractions to the GPU. To accelerate SCF Coulomb/exchange builds as well,
+wrap `df_reference.kernel()` in `with device_df_jk(df_reference, "cuda"):`,
+imported from `deepks.deephf`. PySCF computes the molecular integrals on the CPU.
+
+**Joint fitting.** Prepare each state once with
+`SpinTrainingState.from_reference(df_reference, model, energy_target, force_target)`.
+Supply total energies in Hartree and forces in Hartree/Bohr. Omitting
+`force_target` keeps that state's energy in the loss. For force-labeled
+states the frame caches the HF force and the complete relaxed feature
+Jacobian in inverse Bohr. The force loss differentiates the contraction
+through the current network weights. The joint objective uses Smooth L1
+with transitions at 1 eV and 1 eV/Å, averages force components within each
+state, and averages over the force-labeled states. The default coefficient
+on that force term is one.
+
+```python
+from deepks.deephf import spin_energy_force_loss
+
+optimizer.zero_grad()
+loss = spin_energy_force_loss(model, states, force_weight=1.0)
+loss.backward()
+optimizer.step()
+model.save("joint.pth")
+```
+
+For a self-contained neutral/cation fit, run
+`uv run python examples/spin_joint/train.py`. The example computes its
+own reference labels and performs three optimizer steps. The CPU archive
+regression and small-molecule finite-difference checks run with
+`uv run pytest tests/spin_energy`.
+
 ## Command-line interface
 
 The installed `deepks` command, also available as `dks`, provides these subcommands:
@@ -98,7 +198,7 @@ uv run deepks train --help
 | ruamel.yaml | YAML configuration loading | 0.19.1 |
 | Paramiko | SSH-backed task execution | 5.0.0 |
 
-GPU execution is mandatory. Runtime entry points reject CPU devices, unavailable CUDA runtimes, and execution outside a Slurm allocation instead of falling back to the CPU. The runtime preloads the locked CUDA 12.8 runtime and NVRTC libraries before CuPy initialization so Blackwell devices compile GPU kernels against the matching toolkit.
+The conventional CorrNet and self-consistent workflows require GPU execution. Their runtime entry points reject CPU devices, unavailable CUDA runtimes, and execution outside a Slurm allocation instead of falling back to the CPU. The runtime preloads the locked CUDA 12.8 runtime and NVRTC libraries before CuPy initialization so Blackwell devices compile GPU kernels against the matching toolkit.
 
 ### Development and build dependencies
 
