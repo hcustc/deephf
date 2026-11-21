@@ -64,10 +64,19 @@ builds the PySCF Fock matrix and canonicalizes the orbitals. The inference
 provenance JSON records the effective SCF engine, device, density-fitting flag
 and auxiliary basis alongside the root-overlap history.
 
-The default conventional GPU workflow provides the direct gradient. When an
-HF engine is selected explicitly, `direct` and `zvector` use DeePHF's
-PySCF-based nuclear derivatives on that engine's occupied subspaces. Transport
-checks the energy, density and orbital stationarity without another SCF solve.
+For a conventional `CorrNet` checkpoint, both settings below run SCF with GPU4PySCF.
+The choice of `scf_backend` also determines which nuclear gradients are available.
+
+| `scf_backend` | Reference families | Nuclear gradient |
+| --- | --- | --- |
+| Omitted | RHF, UHF, RKS, UKS | The native GPU workflow computes the `direct` gradient. |
+| `"gpu4pyscf"` | RHF, UHF | DeePHF transports the occupied subspaces to PySCF and computes the `direct` or `zvector` gradient. |
+
+Explicitly selecting `pyscf` or `generativeqc` also uses the PySCF-based
+`direct` and `zvector` derivatives for conventional RHF and UHF. When
+transporting an external root, DeePHF checks its energy, density and orbital
+stationarity without another SCF solve.
+
 For spin checkpoints, the optional `generativeqc-zvector` algorithm evaluates
 the J/K action in the orbital adjoint with GenerativeQC. Its FockPlan accepts orbital and auxiliary
 shells through f. For def2-SVP calculations whose JK fitting basis contains g
