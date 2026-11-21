@@ -7,6 +7,8 @@ import numpy as np
 from pyscf import df, gto, scf
 from scipy.linalg import eigh
 
+from deepks.gpu import as_numpy, require_cuda_device
+
 
 @dataclass(frozen=True)
 class HFState:
@@ -84,8 +86,12 @@ def _shells(molecule):
 
 
 def validate_seed(seed, target, family):
-    """A warm start may move nuclei but must describe the same ordered HF problem."""
-    if (not isinstance(seed, (scf.hf.RHF, scf.uhf.UHF)) or hasattr(seed, "xc")
+    """Check the ordered nuclei and HF Hamiltonian without converting the SCF object."""
+    from ..gpu_method import gpu_reference_family
+
+    native_hf = isinstance(seed, (scf.hf.RHF, scf.uhf.UHF))
+    gpu_hf = gpu_reference_family(seed) in ("rhf", "uhf")
+    if (not (native_hf or gpu_hf) or hasattr(seed, "xc")
             or not seed.converged or np.iscomplexobj(seed.mo_coeff)):
         raise ValueError("a warm start requires a converged molecular HF reference")
     source, mol = seed.mol, target.mol
@@ -109,7 +115,7 @@ def projected_seed(seed, mol):
     """Project occupied AOs for a PySCF-family SCF guess at the new geometry."""
     if seed is None:
         return None
-    density = np.asarray(seed.make_rdm1())
+    density = as_numpy(seed.make_rdm1())
     if np.array_equal(seed.mol.atom_coords(), mol.atom_coords()):
         return density
     return scf.addons.project_dm_nr2nr(seed.mol, density, mol)
@@ -125,7 +131,7 @@ def _seeded_generativeqc(calc, mol, seed):
 
     xyz = np.ascontiguousarray(seed.mol.atom_coords())
     target_xyz = mol.atom_coords()
-    density = np.ascontiguousarray(seed.make_rdm1(), dtype=np.float64)
+    density = np.ascontiguousarray(as_numpy(seed.make_rdm1()), dtype=np.float64)
     if mol.spin < 0:
         density = np.ascontiguousarray(density[::-1])
     pointer = ctypes.POINTER(ctypes.c_double)
@@ -208,11 +214,13 @@ def _generativeqc(reference, restricted, device, controls, seed):
     return HFState(result.energy, np.asarray(density))
 
 
-def solve_external(reference, family, engine, device, controls, seed):
+def solve_external(reference, family, engine, device, controls, seed, *, dm0=None):
     """Run one external SCF and check its AO/spin conventions before projection."""
     if family not in ("rhf", "uhf"):
         raise ValueError("external DeePHF SCF engines support RHF and UHF")
     restricted = family == "rhf"
+    if device == "cuda":
+        require_cuda_device()
     if engine == "gpu4pyscf":
         if device != "cuda":
             raise ValueError("GPU4PySCF requires scf_device=cuda")
@@ -224,14 +232,87 @@ def solve_external(reference, family, engine, device, controls, seed):
         # GPU4PySCF tests the norm over all orbital gradients. On DF-UHF
         # this can plateau at a few 1e-8 even for a stationary FP64 root.
         gpu.conv_tol_grad = controls.get("conv_tol_grad", 5e-8)
-        gpu.kernel(dm0=projected_seed(seed, reference.mol))
+        gpu.kernel(dm0=dm0 if seed is None else projected_seed(seed, reference.mol))
         if not gpu.converged:
             raise RuntimeError("GPU4PySCF SCF did not converge")
         state = HFState(float(gpu.e_tot), gpu.make_rdm1().get())
     elif engine == "generativeqc":
         if device not in ("cpu", "cuda"):
             raise ValueError("GenerativeQC scf_device must be cpu or cuda")
+        if dm0 is not None:
+            raise ValueError("GenerativeQC warm starts require initial_reference with source geometry")
         state = _generativeqc(reference, restricted, device, controls, seed)
     else:
         raise ValueError(f"unknown SCF backend {engine!r}")
     return state
+
+
+def build_spin_reference(
+    molecule, family, *, density_fit=False, scf_args=None, dft_args=None, dm0=None,
+    verbose=0, auxbasis=None, scf_backend="pyscf", scf_device=None,
+    initial_reference=None, density_only=False,
+):
+    """Solve one molecular HF state, using canonical response orbitals when requested."""
+    if scf_backend not in ("pyscf", "gpu4pyscf", "generativeqc"):
+        raise ValueError(f"unknown SCF backend {scf_backend!r}")
+    if auxbasis is not None and not density_fit:
+        raise ValueError("auxbasis requires density_fit=True")
+    if dm0 is not None and initial_reference is not None:
+        raise ValueError("supply only one of dm0 and initial_reference")
+    if not isinstance(family, str) or family.lower() not in {"rhf", "uhf"} or dft_args is not None:
+        raise ValueError("HF engines require an RHF or UHF reference without DFT controls")
+    family = family.lower()
+    if family == "rhf" and molecule.spin != 0:
+        raise ValueError("the strict RHF family requires molecular spin zero")
+    reference = scf.RHF(molecule) if family == "rhf" else scf.UHF(molecule)
+    expected_type = scf.hf.RHF if family == "rhf" else scf.uhf.UHF
+    if type(reference) is not expected_type:
+        raise TypeError(f"the requested {family.upper()} constructor returned {type(reference).__name__}")
+    if density_fit:
+        reference = reference.density_fit(auxbasis=auxbasis)
+    controls = {
+        "conv_tol": 1e-12 if density_fit else 1e-13,
+        "conv_tol_grad": 1e-8 if density_fit else 1e-10,
+        "conv_tol_cpscf": 1e-12,
+        "max_cycle": 100,
+    }
+    if scf_args is not None and scf_backend != "generativeqc":
+        supported = controls.keys() | {"diis_space", "level_shift", "direct_scf", "conv_check"}
+        unknown = sorted(set(scf_args) - supported)
+        if unknown:
+            raise ValueError("unsupported strict reference controls: " + ", ".join(unknown))
+        controls.update(scf_args)
+    reference.set(verbose=verbose, **controls)
+    if initial_reference is not None:
+        validate_seed(initial_reference, reference, family)
+    if scf_backend != "pyscf":
+        state = solve_external(
+            reference, family, scf_backend, "cuda" if scf_device is None else scf_device,
+            dict(scf_args or {}), initial_reference, dm0=dm0,
+        )
+        if density_only:
+            state.validate(molecule, family == "rhf", reference.get_ovlp())
+            return state
+        return state.response_reference(reference)
+    if scf_device not in (None, "cpu"):
+        raise ValueError("PySCF requires scf_device=cpu")
+    if initial_reference is not None:
+        dm0 = projected_seed(initial_reference, molecule)
+    reference.kernel(dm0=dm0)
+    if not reference.converged:
+        raise RuntimeError(f"the native {family.upper()} reference did not converge")
+    if density_only:
+        return HFState(reference.e_tot, np.asarray(reference.make_rdm1()))
+    return reference
+
+
+def build_hf_state(
+    molecule, family, *, scf_backend="pyscf", scf_device=None, density_fit=False,
+    auxbasis=None, scf_args=None, initial_reference=None, verbose=0,
+):
+    """Return the HF energy and spin-summed RHF or alpha/beta UHF AO density."""
+    return build_spin_reference(
+        molecule, family, scf_backend=scf_backend, scf_device=scf_device,
+        density_fit=density_fit, auxbasis=auxbasis, scf_args=scf_args,
+        initial_reference=initial_reference, verbose=verbose, density_only=True,
+    )

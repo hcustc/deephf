@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from deepks.descriptor import spin_summed_ao_density, validate_differentiability
+from deepks.model.model import corrnet_is_shell_permutation_invariant
 
 from .capabilities import (
     DeePHFCapabilityError,
@@ -111,7 +112,11 @@ class EvaluationContext:
     def model_output(self) -> torch.Tensor:
         if self._model_output is None:
             if self.method.model is None:
-                self._model_output = torch.zeros((), dtype=torch.float64)
+                self._model_output = torch.zeros(
+                    (),
+                    dtype=torch.float64,
+                    device=self.method.device,
+                )
             else:
                 self.count("model_forwards")
                 with torch.enable_grad():
@@ -187,6 +192,9 @@ class EvaluationContext:
                 method._descriptor.shell_sizes,
                 method._descriptor_rank_bound(),
                 self.sensitivity,
+                symmetric_function=corrnet_is_shell_permutation_invariant(
+                    method.model
+                ),
                 **tolerances,
             )
             self._diagnostics[key] = diagnostics

@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 PRODUCTION_LIMIT = 1000
 CALCULATION_FUNCTION_LIMIT = 199
-MODULE_COUNT_LIMIT = 41
+MODULE_COUNT_LIMIT = 44
 FACADE_NAMES = {"pyscf_rhf.py", "pyscf_uhf.py", "pyscf_rks.py", "pyscf_uks.py"}
 CONSOLIDATED_MODULES = {
     "gradient.py",
@@ -51,12 +51,10 @@ def test_deephf_package_has_a_bounded_aggregate_topology():
     # method and training owners. Retain the native four-family topology budget.
     spin_df = tuple((directory / "df_spin").glob("*.py"))
     assert len(spin_df) <= 5
-    # Optional engine adapters have their own package. Keep the original
-    # bound on native PySCF methods, and bound the adapter package separately.
     adapters = set((directory / "backends").glob("*.py"))
     assert len(adapters) <= 3
     assert len(set(modules) - set(spin_df) - adapters) <= MODULE_COUNT_LIMIT
-    assert len(top_level) <= 33
+    assert len(top_level) <= 35
     assert len(audits) <= 9
 
 

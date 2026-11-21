@@ -10,6 +10,7 @@ from pyscf import scf
 from deepks.descriptor import AtomicDensityDescriptor, projected_density, validate_differentiability
 
 from ..backends.generativeqc_response import generativeqc_response
+from ..backends.hf import build_spin_reference as build_spin_reference
 from .integrals import DFFockDerivative, auxiliary_molecule
 from .orbitals import DFOrbitalResponse
 
@@ -127,7 +128,7 @@ class DFSpinDeePHF:
 
     def _descriptors(self):
         ref = self.reference
-        return AtomicDensityDescriptor(ref.mol, self.model.network._pbas)
+        return AtomicDensityDescriptor(ref.mol, self.model.network._pbas, device="cpu")
 
     def descriptor(self):
         """Return the raw single-state spin features in descriptor-atom order."""
@@ -137,16 +138,20 @@ class DFSpinDeePHF:
             .numpy()
         )
 
-    @torch.enable_grad()
     def gradient(self, *, backend="zvector"):
         """Return the total energy gradient in Hartree/Bohr on the current root."""
-        if backend == "direct":
-            return -self.force_frame().forces(self.model).detach().cpu().numpy()
-        if backend not in ("zvector", "generativeqc-zvector"):
-            raise ValueError("unknown spin gradient backend: " + str(backend))
         _validate_local_model(self.model)
+        _validate_reference(self.reference)
+        return self._gradient_on_validated_root(backend)
+
+    @torch.enable_grad()
+    def _gradient_on_validated_root(self, backend):
+        """Evaluate immediately after construction or validation of the current root."""
+        if backend == "direct":
+            return -self._force_frame_on_validated_root().forces(self.model).detach().cpu().numpy()
+        if backend not in ("zvector", "generativeqc-zvector"):
+            raise ValueError(f"unknown spin gradient backend: {backend}")
         ref = self.reference
-        _validate_reference(ref)
         descriptor = self._descriptors()
         density = torch.as_tensor(np.asarray(ref.make_rdm1())).requires_grad_()
         overlaps = tuple(o.requires_grad_() for o in descriptor.overlap_shells)
@@ -208,8 +213,12 @@ class DFSpinDeePHF:
     def force_frame(self):
         """Build a reusable, model-independent relaxed Jacobian on this HF state."""
         _validate_local_model(self.model)
+        _validate_reference(self.reference)
+        return self._force_frame_on_validated_root()
+
+    def _force_frame_on_validated_root(self):
+        """Build a frame immediately after checking this reference and model."""
         ref = self.reference
-        _validate_reference(ref)
         descriptor = self._descriptors()
         density = torch.as_tensor(np.asarray(ref.make_rdm1()))
         features = descriptor.spin_features(density, ref.mol.spin)

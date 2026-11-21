@@ -1,5 +1,6 @@
 """Cross-engine parity, occupied-root transport and corrected-energy derivatives."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -109,6 +110,45 @@ def test_cli_writes_bare_energy_with_selected_engine(tmp_path, monkeypatch):
     np.testing.assert_allclose(saved.ravel(), [expected], atol=1e-10, rtol=0)
 
 
+@pytest.mark.parametrize("engine,device", [("pyscf", "cpu"), *ENGINES])
+def test_cli_follows_selected_engine_across_frames(tmp_path, monkeypatch, engine, device):
+    from deepks.deephf import workflow
+
+    require_engine(engine, device)
+    monkeypatch.chdir(tmp_path)
+    system = Path("trajectory")
+    system.mkdir()
+    (system / "type.raw").write_text("H H\n")
+    np.save(system / "coord.npy", [[[0, 0, 0], [0, 0, 1.40]], [[0, 0, 0], [0, 0, 1.42]]])
+
+    calls = []
+    solve = workflow.build_spin_reference
+
+    def record_solver(*args, **kwargs):
+        calls.append(kwargs["scf_backend"])
+        return solve(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "build_spin_reference", record_solver)
+    [(directory, results)] = workflow.main(
+        [str(system)], reference="rhf", basis="sto-3g", density_fit=True, auxbasis="weigend",
+        scf_backend=engine, scf_device=device, energy_only=True, dump_dir="out",
+    )
+    assert calls == [engine, engine]
+    expected = [
+        scf.RHF(gto.M(atom=f"H 0 0 0; H 0 0 {distance}", basis="sto-3g", unit="Bohr",
+                      verbose=0)).density_fit(auxbasis="weigend").kernel()
+        for distance in (1.40, 1.42)
+    ]
+    np.testing.assert_allclose(results["e_tot"], expected, atol=1e-8, rtol=0)
+    records = json.loads((Path(directory) / workflow.INFERENCE_PROVENANCE_FILENAME).read_text())
+    first, second = records["frames"]
+    assert second["parent_reference_state_fingerprint"] == first["reference_state_fingerprint"]
+    assert second["minimum_occupied_overlap"] > 0.99
+    assert second["initial_guess_source"] == (
+        "previous_reference" if engine == "generativeqc" else "previous_density"
+    )
+
+
 def test_g_shells_fail_explicitly_only_for_native_adjoint():
     mol = gto.M(atom="O 0 0 0; H .94 0 0; H -.23 .85 .13", basis="def2-svp", verbose=0)
     model = SpinCorrNet.load(ARCHIVE / "joint_B.pth")
@@ -138,6 +178,23 @@ def test_restart_at_displaced_geometry(engine, device, charge):
         build_reference(target, **{**options, "auxbasis": "weigend"}, initial_reference=seed)
 
 
+def test_default_gpu_root_can_seed_conventional_and_pyscf_solvers(monkeypatch):
+    from deepks.deephf.gpu_method import is_gpu_reference
+
+    require_engine("gpu4pyscf", "cuda")
+    mol = gto.M(atom="H 0 0 0; H 0 0 0.77", basis="sto-3g", verbose=0)
+    seed = build_reference(mol, "rhf")
+    monkeypatch.setattr(type(seed), "to_cpu", lambda *_: pytest.fail("converted the SCF object"))
+    xyz = mol.atom_coords()
+    xyz[1, 2] += 0.02
+    target = mol.set_geom_(xyz, unit="Bohr", inplace=False)
+    gpu = build_reference(target, "rhf", initial_reference=seed)
+    native = build_reference(target, "rhf", scf_backend="pyscf", initial_reference=seed)
+    assert is_gpu_reference(gpu)
+    np.testing.assert_allclose(gpu.make_rdm1().get(), native.make_rdm1(), atol=1e-8, rtol=0)
+    np.testing.assert_allclose(gpu.e_tot, native.e_tot, atol=1e-9, rtol=0)
+
+
 @pytest.mark.parametrize("engine,device", ENGINES)
 @pytest.mark.parametrize("charge", [0, 1], ids=["rhf", "uhf"])
 def test_conventional_corrnet_full_gradient(engine, device, charge):
@@ -153,7 +210,7 @@ def test_conventional_corrnet_full_gradient(engine, device, charge):
     torch.manual_seed(17)
     model = CorrNet(1, hidden_sizes=(2,), proj_basis=[[0, [0.7, 1.0]]]).double().eval()
     options = dict(family="uhf" if charge else "rhf", backend="zvector")
-    native = evaluate_molecule(mol, model, **options)
+    native = evaluate_molecule(mol, model, scf_backend="pyscf", **options)
     other = evaluate_molecule(mol, model, scf_backend=engine, scf_device=device, **options)
     for key in ("descriptor", "e_tot", "force"):
         np.testing.assert_allclose(other[key], native[key], rtol=0, atol=4e-7)

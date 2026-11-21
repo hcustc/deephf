@@ -14,7 +14,7 @@ from deepks.model.train import (
     train,
 )
 
-from force_contract_helpers import write_force_contract_sample
+from force_contract_helpers import make_target_identity, write_force_contract_sample
 
 
 ORACLE_PROJECTOR_BASIS = [[0, [0.8, 1.0]], [1, [0.3, 1.0]]]
@@ -202,7 +202,7 @@ def test_train_returns_separate_energy_and_force_metrics(tmp_path):
         start_lr=1.0e-5,
         display_epoch=2,
         ckpt_file=None,
-        device="cpu",
+        device="cuda",
         force_contract=contract,
     )
 
@@ -231,7 +231,7 @@ def test_public_train_rejects_strict_reader_in_energy_only_mode(tmp_path):
             test_reader=reader,
             force_factor=0.0,
             ckpt_file=None,
-            device="cpu",
+            device="cuda",
         )
 
 
@@ -247,6 +247,7 @@ def test_train_main_strict_force_contract_initialization_and_restart(
         projector_basis=ORACLE_PROJECTOR_BASIS,
         e_target=case.target_energy,
         f_target=case.target_force,
+        target=make_target_identity(),
     )
     checkpoint = tmp_path / "force-model.pth"
     common = {
@@ -259,7 +260,7 @@ def test_train_main_strict_force_contract_initialization_and_restart(
             "prefit": False,
         },
         "seed": 91,
-        "device": "cpu",
+        "device": "cuda",
     }
 
     result = train_main(

@@ -7,9 +7,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from pyscf import gto, scf
+from pyscf import gto
 
 from deepks.deephf import DeePHF, write_rhf_force_dataset
+from deepks.deephf.workflow import build_reference
 from deepks.model.model import CorrNet
 
 
@@ -24,6 +25,20 @@ VALIDATION_COORDINATES = np.array(
     dtype=np.float64,
 )
 TEACHER_WEIGHTS = np.array([0.037, -0.021, 0.013, 0.029], dtype=np.float64)
+TARGET_IDENTITY = {
+    "method": "deterministic DeePHF CorrNet teacher",
+    "basis": "sto-3g",
+    "software": "deepks-kit example",
+    "version": "1",
+    "frozen_core": False,
+    "relativistic": "none",
+    "state": "closed-shell singlet ground state",
+    "energy_force_consistent": True,
+    "settings": {
+        "teacher_weights": TEACHER_WEIGHTS.tolist(),
+        "teacher_bias": 0.011,
+    },
+}
 
 
 def make_reference(coordinates: np.ndarray):
@@ -35,15 +50,16 @@ def make_reference(coordinates: np.ndarray):
         cart=False,
         verbose=0,
     )
-    reference = scf.RHF(molecule)
-    reference.conv_tol = 1.0e-13
-    reference.conv_tol_grad = 1.0e-10
-    reference.conv_tol_cpscf = 1.0e-12
-    reference.max_cycle = 100
-    reference.kernel()
-    if not reference.converged:
-        raise RuntimeError("the example RHF reference did not converge")
-    return reference
+    return build_reference(
+        molecule,
+        "rhf",
+        scf_args={
+            "conv_tol": 1.0e-13,
+            "conv_tol_grad": 1.0e-10,
+            "conv_tol_cpscf": 1.0e-12,
+            "max_cycle": 100,
+        },
+    )
 
 
 def make_teacher() -> CorrNet:
@@ -81,6 +97,7 @@ def write_example_dataset(directory: Path, coordinates: np.ndarray, teacher: Cor
         projector_basis=PROJECTOR_BASIS,
         e_target=energy,
         f_target=force,
+        target=TARGET_IDENTITY,
     )
 
 

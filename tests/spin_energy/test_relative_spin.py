@@ -108,10 +108,20 @@ def test_relative_checkpoint_separate_states(tmp_path, masked):
             verbose=0,
         )
         ref = (scf.UHF(mol) if spin else scf.RHF(mol)).run()
-        desc = AtomicDensityDescriptor(mol, BASIS)
+        desc = AtomicDensityDescriptor(mol, BASIS, device="cpu")
         x = desc.spin_features(ref.make_rdm1(), spin)
         xyz = torch.from_numpy(mol.atom_coords(unit="Angstrom")[[0, 2]])
         expected = ref.e_tot + model(x, xyz).item() - 0.06
         np.testing.assert_allclose(
             loaded.total_energy(ref), expected, atol=1e-12, rtol=0
         )
+
+
+@pytest.mark.parametrize("mask", [torch.ones(2, dtype=torch.uint8),
+                                  torch.ones(2, dtype=torch.long),
+                                  torch.ones((1, 2), dtype=torch.bool)])
+def test_prepared_features_reject_invalid_masks(mask):
+    model = SpinCorrNet(BASIS, (4,))
+    prepared = model.prepare_features(torch.zeros(2, model.network.input_dim))
+    with pytest.raises(ValueError, match="atom_mask"):
+        model.forward_prepared(prepared, mask)

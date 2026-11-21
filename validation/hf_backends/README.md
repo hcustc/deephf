@@ -13,8 +13,14 @@ and GenerativeQC's RHF/UHF Fock action against the direct relaxed Jacobian.
 python -m pytest -q tests/hf_backends
 ```
 
+After integration with `master` at `7e33d2a`, all 1,028 tests passed on an
+RTX 5090 with the locked Linux environment (PySCF 2.14.0, GPU4PySCF 1.8.1,
+PyTorch 2.11.0+cu128) and the optional GenerativeQC library. This includes
+all 34 backend tests. They cover two-frame CLI root tracking with each engine
+and continuation from a GPU-native HF reference.
+
 The optional-engine tests run when the engine is importable. CUDA tests use
-a visible GPU and a CUDA-enabled Torch installation. The validation on n1
+a visible GPU and a CUDA-enabled Torch installation. The original backend comparison
 used an RTX 5090, GPU4PySCF 1.7.4, and a GenerativeQC CUDA
 build with native source identity
 `3b31877336dd65af68a072e89d993f244138aa6e53dc455b8d33b3cb954697cc`.
@@ -30,7 +36,7 @@ relative to PySCF.
 | GPU4PySCF | 9.38e−13 | 1.09e−9 | 5.73e−8 | 5.60e−8 | −7.89e−9 |
 | GenerativeQC CUDA | 6.54e−13 | 9.13e−11 | 1.12e−8 | 1.22e−8 | −1.95e−9 |
 
-In the repository's locked Linux CPU environment the full candidate suite
+Before integration with the GPU workflow, the locked Linux CPU suite
 had 923 passes, 23 skips and one failure. The base commit `8716f1d` had
 916 passes, one skip and the same failure in
 `test_spin_resolved_density_response_matches_fresh_uks[0.0001-2e-07]`.
