@@ -1,0 +1,153 @@
+{
+  "commit": "bfb94e18b2c35867454665d49ed08846769c532c",
+  "profile_sha256": "134d8b05aeb8364a521730093b9489e947f798e9f68d2c1df76872a93643a778",
+  "started_utc": "2026-11-21T15:58:39.243947+00:00",
+  "platform": "macOS-15.6.1-arm64-arm-64bit",
+  "cpu": "Apple M4",
+  "versions": {
+    "pyscf": "2.14.0",
+    "torch": "2.13.0",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "generativeqc": "0.1.0"
+  },
+  "python": "3.11.15",
+  "engine": "generativeqc",
+  "scf_device": "cpu",
+  "response_device": "cpu",
+  "backend": "zvector",
+  "cuda_device": null,
+  "cuda_available": false,
+  "importable_modules": {
+    "gpu4pyscf": false,
+    "generativeqc": true
+  },
+  "pyscf_threads": 1,
+  "torch_threads": 1,
+  "torch_interop_threads": 1,
+  "thread_env": {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "BLIS_NUM_THREADS": "1"
+  },
+  "family": "DF-UHF",
+  "basis": "def2-svp",
+  "auxbasis": "def2-svp-jkfit",
+  "scf_args": {
+    "max_cycle": 300,
+    "conv_tol": 1e-12,
+    "density_tolerance": 1e-10
+  },
+  "symbols": [
+    "C",
+    "C",
+    "N",
+    "H",
+    "H",
+    "H"
+  ],
+  "unit": "Angstrom",
+  "charge": 1,
+  "spin": 1,
+  "trajectory_sha256": "c5a2ffbf4e016c267a6dc5aa1f1a9259f46f861a564eddf7e1e936d8cee14525",
+  "checkpoint": "tests/spin_energy/data/qm9_methanol/joint_B.pth",
+  "checkpoint_sha256": "64f432a37ec324aebe2ee2103b1cddbe7bc2fff21e003e257264a6ae80833e39",
+  "frames": [
+    {
+      "line": 35,
+      "event": "initial",
+      "stage": null,
+      "step": null,
+      "attempt": null,
+      "HF_Eh": -131.41698640917417,
+      "S2": 0.7569407276804903
+    },
+    {
+      "line": 36,
+      "event": "accepted",
+      "stage": "cation_seed",
+      "step": 0,
+      "attempt": 0,
+      "HF_Eh": -131.41757382103643,
+      "S2": 0.7572646810342185
+    },
+    {
+      "line": 39,
+      "event": "accepted",
+      "stage": "cation",
+      "step": 1,
+      "attempt": 2,
+      "HF_Eh": -131.42115716387204,
+      "S2": 0.7704607795185758
+    },
+    {
+      "line": 41,
+      "event": "accepted",
+      "stage": "cation",
+      "step": 2,
+      "attempt": 1,
+      "HF_Eh": -131.41945535622227,
+      "S2": 0.7673596862375298
+    }
+  ],
+  "runs": [
+    {
+      "repeat": 1,
+      "profiled": false,
+      "frames": [],
+      "failed_frame": {
+        "line": 35,
+        "phase": "archive_root_check",
+        "error": "HF energy or spin differs from the archived branch",
+        "e_hf_Eh": -131.39961334636675,
+        "s2": 0.9963486920229094,
+        "canonical_residual": 1.0593089513205589e-10,
+        "attempt_s": 11.15744849992916
+      }
+    },
+    {
+      "repeat": 1,
+      "profiled": true,
+      "frames": [],
+      "failed_frame": {
+        "line": 35,
+        "phase": "archive_root_check",
+        "error": "HF energy or spin differs from the archived branch",
+        "e_hf_Eh": -131.39961334636675,
+        "s2": 0.9963486920229094,
+        "canonical_residual": 1.0593089513205589e-10,
+        "attempt_s": 11.14125604100991,
+        "exclusive_s": {
+          "scf": 10.792379584047012,
+          "transport": 0.020484957960434258,
+          "stationarity": 0.0028013749979436398,
+          "descriptor_network": 0.00689791701734066,
+          "hf_gradient": 0.09770383301656693,
+          "orbital_adjoint": 0.13943762402050197,
+          "df_fock_derivative": 0.07801308401394635,
+          "other": 0.003537665936164558
+        },
+        "get_veff": {
+          "transport": {
+            "calls": 1,
+            "seconds": 0.018470250070095062
+          },
+          "stationarity": {
+            "calls": 1,
+            "seconds": 0.0022407500073313713
+          }
+        },
+        "paired_inputs": {
+          "same_reference": true,
+          "max_abs_density_difference": 9.013449708827892e-14
+        }
+      }
+    }
+  ],
+  "generativeqc_source_identity": "ca8f2c437b423a7f260362c7d129b47a34e11d2c259754d9af6a424fd5e3ec14",
+  "compared_frame_count": 0,
+  "max_abs_difference_from_plain": null,
+  "status": "incomplete"
+}

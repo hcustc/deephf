@@ -1,0 +1,272 @@
+{
+  "commit": "bfb94e18b2c35867454665d49ed08846769c532c",
+  "profile_sha256": "134d8b05aeb8364a521730093b9489e947f798e9f68d2c1df76872a93643a778",
+  "started_utc": "2026-11-21T15:59:04.902793+00:00",
+  "platform": "macOS-15.6.1-arm64-arm-64bit",
+  "cpu": "Apple M4",
+  "versions": {
+    "pyscf": "2.14.0",
+    "torch": "2.13.0",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "generativeqc": "0.1.0"
+  },
+  "python": "3.11.15",
+  "engine": "generativeqc",
+  "scf_device": "cpu",
+  "response_device": "cpu",
+  "backend": "zvector",
+  "cuda_device": null,
+  "cuda_available": false,
+  "importable_modules": {
+    "gpu4pyscf": false,
+    "generativeqc": true
+  },
+  "pyscf_threads": 1,
+  "torch_threads": 1,
+  "torch_interop_threads": 1,
+  "thread_env": {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "BLIS_NUM_THREADS": "1"
+  },
+  "family": "DF-UHF",
+  "basis": "def2-svp",
+  "auxbasis": "def2-svp-jkfit",
+  "scf_args": {
+    "max_cycle": 300,
+    "conv_tol": 1e-12,
+    "density_tolerance": 1e-10
+  },
+  "symbols": [
+    "C",
+    "C",
+    "N",
+    "H",
+    "H",
+    "H"
+  ],
+  "unit": "Angstrom",
+  "charge": 1,
+  "spin": 1,
+  "trajectory_sha256": "c5a2ffbf4e016c267a6dc5aa1f1a9259f46f861a564eddf7e1e936d8cee14525",
+  "checkpoint": "tests/spin_energy/data/qm9_methanol/joint_B.pth",
+  "checkpoint_sha256": "64f432a37ec324aebe2ee2103b1cddbe7bc2fff21e003e257264a6ae80833e39",
+  "frames": [
+    {
+      "line": 35,
+      "event": "initial",
+      "stage": null,
+      "step": null,
+      "attempt": null,
+      "HF_Eh": -131.41698640917417,
+      "S2": 0.7569407276804903
+    },
+    {
+      "line": 36,
+      "event": "accepted",
+      "stage": "cation_seed",
+      "step": 0,
+      "attempt": 0,
+      "HF_Eh": -131.41757382103643,
+      "S2": 0.7572646810342185
+    },
+    {
+      "line": 39,
+      "event": "accepted",
+      "stage": "cation",
+      "step": 1,
+      "attempt": 2,
+      "HF_Eh": -131.42115716387204,
+      "S2": 0.7704607795185758
+    },
+    {
+      "line": 41,
+      "event": "accepted",
+      "stage": "cation",
+      "step": 2,
+      "attempt": 1,
+      "HF_Eh": -131.41945535622227,
+      "S2": 0.7673596862375298
+    }
+  ],
+  "runs": [
+    {
+      "repeat": 1,
+      "profiled": false,
+      "frames": [
+        {
+          "line": 35,
+          "wall_s": 8.399797165999189,
+          "scf_cycles": null,
+          "guess": "same_geometry_pyscf",
+          "overlap": {
+            "alpha": 1.0,
+            "beta": 1.0
+          },
+          "canonical_residual": 7.590447703969411e-11,
+          "s2": 0.7569407280236362,
+          "e_hf_Eh": -131.41698640921078,
+          "e_total_Eh": -132.31784168385903,
+          "force_Eh_per_Bohr": [
+            [
+              0.014798425809904495,
+              -0.014401600790803477,
+              0.017146853386988292
+            ],
+            [
+              -0.10329396560625187,
+              0.0021432858548945293,
+              -0.0010731635538850206
+            ],
+            [
+              0.08778622797445457,
+              0.0005436265341528627,
+              -0.0005634303308469355
+            ],
+            [
+              -0.0010784254543912235,
+              0.000498491136106536,
+              -0.010982804795138124
+            ],
+            [
+              0.0018571954426031562,
+              0.0011508460371433306,
+              0.0024778734393604354
+            ],
+            [
+              -6.945816625394778e-05,
+              0.010065351228504809,
+              -0.007005328146497016
+            ]
+          ]
+        }
+      ],
+      "failed_frame": {
+        "line": 36,
+        "phase": "scf_and_root_tracking",
+        "error": "GenerativeQC did not converge using the requested HF seed",
+        "attempt_s": 27.052612083032727
+      }
+    },
+    {
+      "repeat": 1,
+      "profiled": true,
+      "frames": [
+        {
+          "line": 35,
+          "wall_s": 8.071129374904558,
+          "exclusive_s": {
+            "scf": 7.702915124944411,
+            "transport": 0.020686167059466243,
+            "stationarity": 0.0027759160147979856,
+            "descriptor_network": 0.00709850003477186,
+            "hf_gradient": 0.09729808301199228,
+            "orbital_adjoint": 0.15911062492523342,
+            "df_fock_derivative": 0.07828983396757394,
+            "other": 0.0029551249463111162
+          },
+          "get_veff": {
+            "transport": {
+              "calls": 1,
+              "seconds": 0.018724665977060795
+            },
+            "stationarity": {
+              "calls": 1,
+              "seconds": 0.002221417031250894
+            }
+          },
+          "paired_inputs": {
+            "same_reference": true,
+            "max_abs_density_difference": 5.5164206536062466e-14
+          },
+          "scf_cycles": null,
+          "guess": "same_geometry_pyscf",
+          "overlap": {
+            "alpha": 1.0,
+            "beta": 1.0
+          },
+          "canonical_residual": 7.590447703969411e-11,
+          "s2": 0.7569407280236362,
+          "e_hf_Eh": -131.41698640921078,
+          "e_total_Eh": -132.31784168385903,
+          "force_Eh_per_Bohr": [
+            [
+              0.014798425809904495,
+              -0.014401600790803477,
+              0.017146853386988292
+            ],
+            [
+              -0.10329396560625187,
+              0.0021432858548945293,
+              -0.0010731635538850206
+            ],
+            [
+              0.08778622797445457,
+              0.0005436265341528627,
+              -0.0005634303308469355
+            ],
+            [
+              -0.0010784254543912235,
+              0.000498491136106536,
+              -0.010982804795138124
+            ],
+            [
+              0.0018571954426031562,
+              0.0011508460371433306,
+              0.0024778734393604354
+            ],
+            [
+              -6.945816625394778e-05,
+              0.010065351228504809,
+              -0.007005328146497016
+            ]
+          ]
+        }
+      ],
+      "failed_frame": {
+        "line": 36,
+        "phase": "scf_and_root_tracking",
+        "error": "GenerativeQC did not converge using the requested HF seed",
+        "attempt_s": 26.746620791964233,
+        "exclusive_s": {
+          "scf": 26.744696541922167,
+          "transport": 0.0,
+          "stationarity": 0.0,
+          "descriptor_network": 0.0,
+          "hf_gradient": 0.0,
+          "orbital_adjoint": 0.0,
+          "df_fock_derivative": 0.0,
+          "other": 0.001924250042065978
+        },
+        "get_veff": {
+          "transport": {
+            "calls": 0,
+            "seconds": 0
+          },
+          "stationarity": {
+            "calls": 0,
+            "seconds": 0
+          }
+        },
+        "paired_inputs": null
+      }
+    }
+  ],
+  "initial_anchor": {
+    "engine": "pyscf",
+    "prepare_s": 0.4081742080161348,
+    "e_hf_Eh": -131.41698640917463,
+    "cycles": 100
+  },
+  "generativeqc_source_identity": "ca8f2c437b423a7f260362c7d129b47a34e11d2c259754d9af6a424fd5e3ec14",
+  "compared_frame_count": 1,
+  "max_abs_difference_from_plain": {
+    "e_hf_Eh": 0.0,
+    "e_total_Eh": 0.0,
+    "force_Eh_per_Bohr": 0.0
+  },
+  "status": "incomplete"
+}

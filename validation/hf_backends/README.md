@@ -126,3 +126,134 @@ and smoothed B. Reducing the step again increased both differences to about
 The positive soft mode that dominates the orbital force and the distinct
 negative mode that establishes internal instability were identified in the
 original PySCF orbital-Hessian decomposition.
+
+## Fixed-geometry acetonitrile cation forces
+
+`profile_forces.py` replays the B trajectory in the geometry-optimization
+archive. The cation initial event and the next three accepted events are
+lines 35, 36, 39 and 41, including the accepted symmetry-breaking seed at
+step 0. The initial XYZ supplies C, C, N, H, H, H order. Its provenance
+and the displacements between accepted events establish Å as the length unit.
+The frozen repository `joint_B.pth` is evaluated on each DF-UHF doublet
+using spherical def2-SVP, def2-SVP-JKFIT and explicit `backend="zvector"`.
+The archived energies and spin expectation values check the HF branch.
+The energy and force comparisons use the same single checkpoint in both runs.
+
+Run from the DeePHF checkout. Set `ARCHIVE` to the directory containing
+`initial/` and `runs/`. The commands use one CPU thread. Run each CUDA
+command in an existing single-GPU allocation with the corresponding engine.
+The model and response contractions use CPU by default in all three cases.
+
+```bash
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 BLIS_NUM_THREADS=1
+ARCHIVE=../../outputs/qm9_ie_geometry_opt
+python -m validation.hf_backends.profile_forces pyscf "$ARCHIVE" --output pyscf.json
+python -m validation.hf_backends.profile_forces generativeqc "$ARCHIVE" --scf-device cpu --output gqc-cpu.json
+python -m validation.hf_backends.profile_forces generativeqc "$ARCHIVE" --scf-device cuda --output gqc-cuda.json
+python -m validation.hf_backends.profile_forces gpu4pyscf "$ARCHIVE" --output gpu4pyscf.json
+```
+
+Each pass creates a new CLI reference sequence. The first frame uses the
+engine's independent guess. Later frames use the previous accepted raw AO
+density for PySCF/GPU4PySCF or the previous reference with its source
+geometry for GenerativeQC. PySCF uses DIIS space 48 and a 300-cycle limit.
+With the default eight-vector history, the first native solve missed the
+gradient tolerance even after 400 cycles on the local host.
+
+Wall time spans molecule construction, the SCF and root-continuity checks,
+corrected energy, analytic gradient, and returned descriptor. Input/output,
+model loading, profiling-hook installation and independent post-step
+diagnostics are outside the clock. Three plain/profile pairs alternate order
+in one process, starting with plain. Every pass resets the electronic seed.
+Each profiled interval synchronizes the active CUDA device at both ends when
+either the SCF or the response uses CUDA. Plain runs synchronize only at step
+boundaries.
+
+The eight exclusive stage times sum to profiled wall time. SCF includes
+reference setup, seed handling and density export. External root transport
+covers canonicalization and its Hamiltonian checks. Descriptor/network time
+includes the energy call, gradient backpropagation, explicit projector motion,
+and output descriptor. Orbital adjoint includes DF factor transformation,
+GMRES and the metric contraction. The DF Fock derivative includes building
+the integral derivatives and contracting the orbital probes. The two
+`get_veff` counters are nested subsets of transport and stationarity,
+respectively. They exclude SCF iterations and the off-clock residual check.
+
+### Apple M4, one CPU thread
+
+The [PySCF measurements](acetonitrile_pyscf.json) used PySCF 2.14.0 and
+PyTorch 2.13.0. The recorded checkout `bfb94e1` adds the CorrNet routing
+documentation to `7f7b282`; the numerical code is identical. The table
+gives arithmetic means in milliseconds over three initial-frame measurements
+and nine continued-frame measurements. Every continued frame uses its actual
+preceding accepted geometry. Plain wall times and profiled stages come from
+separate passes. Individual wall times, SCF cycles, stage samples, energies,
+all force components and root checks are in the JSON.
+
+| PySCF stage | Initial (3) | Continued (9) |
+| --- | ---: | ---: |
+| Plain whole step | 952.3 | 577.6 |
+| Profiled whole step | 764.1 | 607.7 |
+| SCF | 423.3 | 236.8 |
+| External root transport | 0.0 | 0.0 |
+| Reference stationarity | 2.8 | 2.9 |
+| Descriptor and network | 6.9 | 7.1 |
+| HF gradient | 95.8 | 99.5 |
+| Orbital adjoint | 155.6 | 174.9 |
+| DF Fock integral derivatives | 77.4 | 83.5 |
+| Remaining step work | 2.3 | 2.9 |
+
+The three plain medians per accepted geometry were 712.5, 505.5 and 540.3
+ms, following an initial-frame median of 970.7 ms. The four SCF cycle counts
+were 100, 76, 36 and 42. All profiled runs reproduced the plain HF energy,
+corrected energy and all 18 force components on every frame exactly. The
+largest canonical residual was 2.39e−9, and the smallest adjacent occupied
+overlap was 0.94055. PySCF made zero transport-site and one validation-site
+`get_veff` call per frame. The latter averaged 2.23 ms initially and 2.36 ms
+on continuation. The native path supplies no duplicate at these sites.
+
+The optional GenerativeQC CPU build tested on this Mac was
+`b1afee7f7bcfcbd984082df4f5d2ad1a878e639c`. Its independent first SCF
+reached a stationary root 0.01737306 Ha above the archived root. With
+`--seed-initial`, PySCF prepared the first-geometry root once (0.408 s)
+outside the replay. GenerativeQC reproduced that root in 8.400 s plain or
+8.071 s profiled. On line 36 it did not converge with the requested previous
+reference in 300 cycles. The runner retains the matched prefix and both
+failure records, then exits nonzero. See the [independent attempt](acetonitrile_gqc_independent.json)
+and [anchored attempt](acetonitrile_gqc_anchored.json). CUDA was unavailable on the Mac.
+
+### RTX 5090 server
+
+All configurations below ran serially on node1 during Slurm allocation
+19127, on AMD EPYC 9354 cores 28–29 with one compute thread and, where
+used, a single RTX 5090 (GPU index 2). The concurrent warm-start job had
+separate cores and GPU index 3. PySCF 2.14.0, GPU4PySCF 1.8.1 and
+PyTorch 2.11.0+cu128 used the same archive, weights and code as above.
+Times are mean milliseconds. The independent first call of each process
+includes lazy initialization. Continued times pool nine frame samples
+from three replays. Response device controls the spin network and orbital
+contractions. The HF nuclear gradient and DF integral derivatives use PySCF on CPU.
+
+| SCF engine | Response device | Plain initial | Plain continued | Profiled continued | Transport get_veff (continued) | Validation get_veff (continued) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| [PySCF](acetonitrile_n1/pyscf.json) | CPU | 3083.9 | 1142.7 | 1140.3 | 0 | 5.27 |
+| [PySCF](acetonitrile_n1/pyscf_cuda_response.json) | CUDA | 2896.1 | 875.0 | 872.6 | 0 | 5.34 |
+| [GPU4PySCF](acetonitrile_n1/gpu4pyscf.json) | CPU | 2878.8 | 1227.6 | 1241.0 | 50.10 | 5.44 |
+| [GPU4PySCF](acetonitrile_n1/gpu4pyscf_cuda_response.json) | CUDA | 2645.7 | 944.4 | 950.5 | 52.95 | 5.42 |
+| [GenerativeQC CUDA, anchored](acetonitrile_n1/generativeqc_cuda_anchored.json) | CPU | 1374.5 | 1089.2 | 1089.9 | 49.40 | 5.34 |
+
+The [independent GenerativeQC CUDA run](acetonitrile_n1/generativeqc_cuda.json)
+selected the same higher-energy first root as the Mac CPU build. The anchored
+run reached all four archived geometries. Its first-frame wall time excludes
+the one-time same-geometry PySCF anchor preparation recorded in the JSON.
+To reproduce, add `--seed-initial` to the GenerativeQC command above.
+Use `--device cuda` to select CUDA response contractions in the other rows.
+The largest plain/profile changes across the complete server runs were
+2.14e−12 Ha in corrected energy and 5.56e−10 Ha/Bohr in any force component.
+The JSON files include every exclusive stage for every frame.
+
+Each accepted external frame had one transport and one validation
+`get_veff` call on the same reference object. Transport uses the exported
+density. Validation rebuilds the density from the canonical orbitals.
+Their elements differed by up to 1.4e−13. The opportunity in the measured
+continuations is the second call, about 0.44–0.57% of the profiled whole step.
