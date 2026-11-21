@@ -53,7 +53,8 @@ class SpinTrainingState:
                 or not torch.isfinite(force_target).all()
             ):
                 raise ValueError("force labels must be finite with shape (natm, 3)")
-            frame = DFSpinDeePHF(reference, model, device=device).force_frame()
+            method = DFSpinDeePHF(reference, model, device=device)
+            frame = method._force_frame_on_validated_root()
             basis = frame.projector_basis
             features = frame.features
         return cls(

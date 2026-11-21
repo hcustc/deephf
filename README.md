@@ -110,7 +110,9 @@ force = method.forces(backend="direct")  # Hartree/Bohr, relaxed Jacobian
 
 The Z-vector path differentiates the local spin traces with respect to the
 two spin densities and the moving projectors, then solves the coupled DF-HF
-orbital adjoint using GMRES. Both backends include auxiliary-centre and
+orbital adjoint using GMRES. The direct Jacobian used for force training stores a
+dense orbital Hessian with memory proportional to the square of the total
+number of occupied–virtual orbital pairs (summed over spin channels). Both backends include auxiliary-centre and
 Coulomb-metric motion. The implementation assumes an isolated stationary
 electronic branch. It rejects unresolved nonstructural eigenvalue crossings
 in the ordered total-density descriptor. Root stability requires a separate

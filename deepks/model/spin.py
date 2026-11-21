@@ -10,6 +10,15 @@ from deepks.model.model import CorrNet
 from deepks.utils import get_shell_sec, load_basis
 
 
+def _validate_atom_mask(features, atom_mask):
+    if atom_mask is not None and (
+        not isinstance(atom_mask, torch.Tensor)
+        or atom_mask.dtype != torch.bool
+        or atom_mask.shape != features.shape[:-1]
+    ):
+        raise ValueError("atom_mask must be boolean with one entry per atom")
+
+
 class SpinCorrNet(torch.nn.Module):
     """An atomic CorrNet averaged over the two equivalent spin labelings.
 
@@ -71,9 +80,8 @@ class SpinCorrNet(torch.nn.Module):
         """
         if features.ndim < 2 or features.shape[-1] != self.n_common + self.n_spin:
             raise ValueError("expected projected spin features with an atom axis")
+        _validate_atom_mask(features, atom_mask)
         if atom_mask is not None:
-            if atom_mask.dtype != torch.bool or atom_mask.shape != features.shape[:-1]:
-                raise ValueError("atom_mask must be boolean with one entry per atom")
             features = features.masked_fill(~atom_mask.unsqueeze(-1), 0)
         if self.relative_cutoff_angstrom is None:
             return features
@@ -103,6 +111,7 @@ class SpinCorrNet(torch.nn.Module):
 
     def forward_prepared(self, features, atom_mask=None):
         """Sum atomic corrections from prepare_features, excluding elemental offsets."""
+        _validate_atom_mask(features, atom_mask)
         spin_end = self.n_common + self.n_spin
         common, spin, relative = torch.split(
             features,
@@ -134,10 +143,9 @@ class SpinCorrNet(torch.nn.Module):
 
     def state_features(self, reference):
         """Build this checkpoint's projector and features for a converged collinear HF state."""
-        if not isinstance(reference, (scf.hf.RHF, scf.uhf.UHF)) or hasattr(
-            reference, "xc"
-        ):
-            raise TypeError("SpinCorrNet expects a collinear HF reference")
+        native = reference.undo_df() if hasattr(reference, "undo_df") else reference
+        if type(native) not in (scf.hf.RHF, scf.uhf.UHF):
+            raise TypeError("SpinCorrNet expects a native RHF or UHF reference")
         if not reference.converged:
             raise ValueError("the single-state reference must be converged")
         descriptor = AtomicDensityDescriptor(reference.mol, self.network._pbas, device="cpu")

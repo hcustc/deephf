@@ -115,3 +115,13 @@ def test_relative_checkpoint_separate_states(tmp_path, masked):
         np.testing.assert_allclose(
             loaded.total_energy(ref), expected, atol=1e-12, rtol=0
         )
+
+
+@pytest.mark.parametrize("mask", [torch.ones(2, dtype=torch.uint8),
+                                  torch.ones(2, dtype=torch.long),
+                                  torch.ones((1, 2), dtype=torch.bool)])
+def test_prepared_features_reject_invalid_masks(mask):
+    model = SpinCorrNet(BASIS, (4,))
+    prepared = model.prepare_features(torch.zeros(2, model.network.input_dim))
+    with pytest.raises(ValueError, match="atom_mask"):
+        model.forward_prepared(prepared, mask)

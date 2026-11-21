@@ -6,6 +6,14 @@ from pyscf import lib
 from scipy.sparse.linalg import LinearOperator, gmres
 
 
+def _check_direct_residual(error, rhs):
+    """Bound each Cartesian residual independently in the infinity norm."""
+    scale = rhs.abs().amax(dim=1).clamp_min(1.0)
+    residual = (error.abs().amax(dim=1) / scale).max().item()
+    if not np.isfinite(residual) or residual > 1e-8:
+        raise RuntimeError(f"DF-HF orbital response scaled residual {residual:.3g}")
+
+
 class DFOrbitalResponse:
     """Use the same metric-whitened DF factors for direct and adjoint solves.
 
@@ -148,9 +156,7 @@ class DFOrbitalResponse:
             return [p.cpu() for p in gauge]
         hessian = torch.block_diag(*diagonal_blocks) + (2 * self.weight) * (self.vo.T @ self.vo)
         amplitudes = torch.linalg.solve(hessian, rhs.T).T
-        residual = (amplitudes @ hessian.T - rhs).abs().max().item()
-        if not np.isfinite(residual) or residual > 1e-8:
-            raise RuntimeError(f"DF-HF orbital response residual {residual:.3g}")
+        _check_direct_residual(amplitudes @ hessian.T - rhs, rhs)
         result = []
         for p, v, o, gap, x in zip(
             gauge, self.virtual, self.occupied, self.gaps, amplitudes.split(self.sizes, dim=1)

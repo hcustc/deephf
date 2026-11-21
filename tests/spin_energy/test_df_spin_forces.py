@@ -187,3 +187,96 @@ def test_gradient_rejects_energy_only_or_unsupported_references():
     ref.only_dfj = True
     with pytest.raises(ValueError, match="DF J and K"):
         make_deephf(ref, spin_model(True))
+
+
+@pytest.mark.parametrize("case", ["signed", "complex", "list", "tuple"])
+def test_device_jk_uses_supplied_ao_density(case):
+    from pyscf import lib
+
+    ref = reference(0)
+    c = ref.mo_coeff
+    occ = ref.mo_occ.copy()
+    occ[0] = -1.0
+    matrix = (c * occ) @ c.T
+    # Native PySCF on the plain AO density is independent of orbital tags.
+    dm = {
+        "signed": lib.tag_array(matrix, mo_coeff=c, mo_occ=occ),
+        "complex": lib.tag_array(ref.make_rdm1(), mo_coeff=1j * c, mo_occ=ref.mo_occ),
+        "list": [matrix, -matrix],
+        "tuple": (matrix, -matrix),
+    }[case]
+    native = ref.with_df.get_jk(np.asarray(dm))
+    with device_df_jk(ref, "cpu"):
+        for value, target in zip(ref.with_df.get_jk(dm), native):
+            np.testing.assert_allclose(value, target, rtol=0, atol=1e-12)
+
+
+def test_fock_derivative_with_empty_basis_centres():
+    from deepks.deephf.df_spin.integrals import DFFockDerivative
+
+    def contracted(atoms):
+        mol = gto.M(atom=atoms, basis={"H": "sto-3g"}, verbose=0)
+        ref = scf.RHF(mol).density_fit(auxbasis={"H": "weigend"}).run()
+        probe = np.array([[[0.8, 0.3], [0.3, -0.2]]])
+        return DFFockDerivative(ref).contract(probe)
+
+    bare = contracted("H 0 0 0; H 0 0 0.9")
+    ghost = contracted("H 0 0 0; ghost-He 0 1 0; H 0 0 0.9; ghost-He 0 0 2")
+    np.testing.assert_allclose(ghost[[0, 2]], bare, atol=1e-12, rtol=0)
+    np.testing.assert_allclose(ghost[[1, 3]], 0.0, atol=1e-12, rtol=0)
+
+
+def test_reused_method_revalidates_stationarity():
+    ref = reference(0)
+    method = make_deephf(ref, spin_model(True))
+    ref.mo_energy = ref.mo_energy + 0.1
+    for calculate in (method.gradient, method.force_frame):
+        with pytest.raises(ValueError, match="stationary"):
+            calculate()
+
+
+def test_spin_workflows_reject_non_df_forces_before_scf(tmp_path, monkeypatch):
+    from deepks.deephf import workflow
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("started the reference for an unsupported force request")
+
+    monkeypatch.setattr(workflow, "build_spin_reference", unexpected)
+    model = spin_model(True)
+    path = tmp_path / "spin.pth"
+    model.save(path)
+    with pytest.raises(ValueError, match="--density-fit"):
+        workflow.evaluate_molecule(None, model, family="rhf")
+    with pytest.raises(ValueError, match="--density-fit"):
+        workflow.main([], reference="rhf", model_file=path)
+
+def test_direct_residual_scale_is_local_to_each_perturbation():
+    from deepks.deephf.df_spin.orbitals import _check_direct_residual
+
+    rhs = torch.tensor([[1e6, 0], [0, 0.1]], dtype=torch.float64)
+    error = torch.tensor([[1e-3, 0], [0, 1e-9]], dtype=torch.float64)
+    _check_direct_residual(error, rhs)
+    error[1, 0] = 1e-6
+    with pytest.raises(RuntimeError, match="response scaled residual"):
+        _check_direct_residual(error, rhs)
+
+
+def test_one_shot_force_workflows_validate_the_fock_once(monkeypatch):
+    from deepks.deephf import evaluate_molecule
+    from deepks.deephf.df_spin import method as spin_method
+
+    validate = spin_method._validate_reference
+    checked = []
+
+    def count_validation(ref):
+        checked.append(ref)
+        validate(ref)
+
+    monkeypatch.setattr(spin_method, "_validate_reference", count_validation)
+    ref = reference(0)
+    model = spin_model(True)
+    SpinTrainingState.from_reference(ref, model, ref.e_tot, np.zeros((ref.mol.natm, 3)))
+    assert checked == [ref]
+    checked.clear()
+    evaluate_molecule(ref.mol, model, family="rhf", density_fit=True)
+    assert len(checked) == 1

@@ -81,3 +81,11 @@ def test_public_workflow_reads_spin_checkpoint(tmp_path, monkeypatch, cutoff):
     records = json.loads((Path(output) / "deephf_provenance.json").read_text())["frames"]
     assert records[1]["initial_guess_source"] == "previous_density"
     assert records[1]["parent_reference_state_fingerprint"] == records[0]["reference_state_fingerprint"]
+
+
+def test_energy_rejects_rohf_with_or_without_density_fitting():
+    mol = gto.M(atom="Li 0 0 0", basis="sto-3g", spin=1, verbose=0)
+    model = SpinCorrNet(BASIS, (4,))
+    for ref in (scf.ROHF(mol), scf.ROHF(mol).density_fit()):
+        with pytest.raises(TypeError, match="RHF or UHF"):
+            model.state_features(ref)

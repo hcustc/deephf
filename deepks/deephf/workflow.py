@@ -159,8 +159,10 @@ def make_deephf(
     )
 
 
-def _reference_builder(model, density_fit):
+def _reference_builder(model, density_fit, energy_only):
     if isinstance(model, SpinCorrNet):
+        if not energy_only and not density_fit:
+            raise ValueError("spin forces require density_fit=True (--density-fit)")
         return partial(build_spin_reference, density_fit=density_fit)
     if density_fit:
         raise ValueError("density_fit in this workflow requires a SpinCorrNet checkpoint")
@@ -304,7 +306,7 @@ def evaluate_molecule(
     density_fit=False,
 ):
     """Evaluate one state and optionally omit its descriptor and derivatives."""
-    build = _reference_builder(model, density_fit)
+    build = _reference_builder(model, density_fit, energy_only)
     reference = build(
         molecule,
         family,
@@ -351,7 +353,7 @@ def _evaluate_reference(
                 reference, model, device=device, response_options=response_options,
                 adjoint_options=adjoint_options,
             )
-            gradient = method.gradient(backend=backend)
+            gradient = method._gradient_on_validated_root(backend)
             result.update(descriptor=method.descriptor(), gradient=gradient, force=-gradient)
         return result
     method = make_deephf(
@@ -608,7 +610,7 @@ def main(
             model = SpinCorrNet.load_dict(checkpoint)
         else:
             model = CorrNet.load_dict(checkpoint, strict=True).double().eval()
-    build = _reference_builder(model, density_fit)
+    build = _reference_builder(model, density_fit, energy_only)
     mol_args = {} if mol_args is None else dict(mol_args)
     outputs = []
     for system_path in load_sys_paths(systems):

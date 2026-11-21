@@ -169,16 +169,20 @@ class DFSpinDeePHF:
             .numpy()
         )
 
-    @torch.enable_grad()
     def gradient(self, *, backend="zvector"):
         """Return the total energy gradient in Hartree/Bohr on the current root."""
+        _validate_local_model(self.model)
+        _validate_reference(self.reference)
+        return self._gradient_on_validated_root(backend)
+
+    @torch.enable_grad()
+    def _gradient_on_validated_root(self, backend):
+        """Evaluate immediately after construction or validation of the current root."""
         if backend == "direct":
-            return -self.force_frame().forces(self.model).detach().cpu().numpy()
+            return -self._force_frame_on_validated_root().forces(self.model).detach().cpu().numpy()
         if backend != "zvector":
             raise ValueError("the spin gradient backend must be direct or zvector")
-        _validate_local_model(self.model)
         ref = self.reference
-        _validate_reference(ref)
         descriptor = self._descriptors()
         density = torch.as_tensor(np.asarray(ref.make_rdm1())).requires_grad_()
         overlaps = tuple(o.requires_grad_() for o in descriptor.overlap_shells)
@@ -238,8 +242,12 @@ class DFSpinDeePHF:
     def force_frame(self):
         """Build a reusable, model-independent relaxed Jacobian on this HF state."""
         _validate_local_model(self.model)
+        _validate_reference(self.reference)
+        return self._force_frame_on_validated_root()
+
+    def _force_frame_on_validated_root(self):
+        """Build a frame immediately after checking this reference and model."""
         ref = self.reference
-        _validate_reference(ref)
         descriptor = self._descriptors()
         density = torch.as_tensor(np.asarray(ref.make_rdm1()))
         features = descriptor.spin_features(density, ref.mol.spin)
