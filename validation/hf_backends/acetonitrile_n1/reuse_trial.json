@@ -1,0 +1,502 @@
+{
+  "commit": "f84cc66835a12579f58fdd4498403d9be9c80c83",
+  "trial_sha256": "30c638b5ac9eaf23df4a772842a86068827a9aa573cf67fd8436975dd0af0e12",
+  "profile_sha256": "134d8b05aeb8364a521730093b9489e947f798e9f68d2c1df76872a93643a778",
+  "checkpoint_sha256": "64f432a37ec324aebe2ee2103b1cddbe7bc2fff21e003e257264a6ae80833e39",
+  "trajectory_sha256": "c5a2ffbf4e016c267a6dc5aa1f1a9259f46f861a564eddf7e1e936d8cee14525",
+  "scf": "gpu4pyscf",
+  "response": "cuda",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "backend": "zvector",
+  "threads": 1,
+  "pairs": [
+    {
+      "order": [
+        "plain",
+        "reuse"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 1.1368683772161603e-13,
+        "e_total_Eh": 5.115907697472721e-13,
+        "force_Eh_per_Bohr": 4.1349104175358864e-10
+      },
+      "delta_FC_bound": [
+        2.042374086369106e-09,
+        1.865469569627759e-09,
+        2.0441871677441082e-09,
+        3.3576770236792327e-09
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.6568999253213406,
+          "canonical_residual": 7.1986609243013255e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0889974534511566,
+          "canonical_residual": 1.4274385454898786e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9236664026975632,
+          "canonical_residual": 1.8022443554893686e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8231215737760067,
+          "canonical_residual": 1.544300781003427e-08
+        }
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.6413182467222214,
+          "canonical_residual": 7.197139492015614e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.082265991717577,
+          "canonical_residual": 1.4283317258112493e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9070217870175838,
+          "canonical_residual": 1.802245625306953e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8266703113913536,
+          "canonical_residual": 1.544300016337319e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "reuse",
+        "plain"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 2.842170943040401e-14,
+        "e_total_Eh": 2.0747847884194925e-12,
+        "force_Eh_per_Bohr": 2.615099525815623e-10
+      },
+      "delta_FC_bound": [
+        2.126596089618859e-09,
+        2.830844435543765e-09,
+        2.037380297182186e-09,
+        2.9314754387296498e-09
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.6461757570505142,
+          "canonical_residual": 7.198268044128486e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.086249079555273,
+          "canonical_residual": 1.4281387569065052e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9151121452450752,
+          "canonical_residual": 1.802247645565913e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8181845583021641,
+          "canonical_residual": 1.5443007431864553e-08
+        }
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.6412909924983978,
+          "canonical_residual": 7.1958096946322936e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0842619501054287,
+          "canonical_residual": 1.4284399062897135e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9263145998120308,
+          "canonical_residual": 1.8022484053747956e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8186702579259872,
+          "canonical_residual": 1.5443005003251686e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "plain",
+        "reuse"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 1.1368683772161603e-13,
+        "e_total_Eh": 2.0463630789890885e-12,
+        "force_Eh_per_Bohr": 6.074903722425029e-10
+      },
+      "delta_FC_bound": [
+        1.4086868240601854e-09,
+        1.8267457919776228e-09,
+        2.7228505907633325e-09,
+        2.4741953922666866e-09
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 2.0850470326840878,
+          "canonical_residual": 7.194022082906981e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.1807169951498508,
+          "canonical_residual": 1.4282563472189924e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9336386956274509,
+          "canonical_residual": 1.8022435429448924e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8251153379678726,
+          "canonical_residual": 1.5443001658704825e-08
+        }
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.6700229309499264,
+          "canonical_residual": 7.199175800637336e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.1071260385215282,
+          "canonical_residual": 1.4276763073833854e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9285643696784973,
+          "canonical_residual": 1.802246191173751e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8245515264570713,
+          "canonical_residual": 1.5443007428395106e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "reuse",
+        "plain"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 1.1368683772161603e-13,
+        "e_total_Eh": 1.8189894035458565e-12,
+        "force_Eh_per_Bohr": 4.4558965198171485e-10
+      },
+      "delta_FC_bound": [
+        3.2465588085954757e-09,
+        1.7805213007738982e-09,
+        2.828799167136471e-09,
+        2.0686012454203092e-09
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.890533484518528,
+          "canonical_residual": 7.2014448501689365e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.283317707479,
+          "canonical_residual": 1.4280227170898607e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 1.0896682664752007,
+          "canonical_residual": 1.8022484213342516e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.9731440022587776,
+          "canonical_residual": 1.544299862640819e-08
+        }
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.9161174893379211,
+          "canonical_residual": 7.196708732420953e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.2756302431225777,
+          "canonical_residual": 1.4281289220652305e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9669125229120255,
+          "canonical_residual": 1.802244437021372e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8509083911776543,
+          "canonical_residual": 1.5443011879695545e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "plain",
+        "reuse"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 5.684341886080802e-14,
+        "e_total_Eh": 1.9610979506978765e-12,
+        "force_Eh_per_Bohr": 1.7875068786255e-10
+      },
+      "delta_FC_bound": [
+        1.4176687315758101e-09,
+        1.0899778628847717e-09,
+        2.295814057037575e-09,
+        2.77011461169758e-09
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.6624305844306946,
+          "canonical_residual": 7.199867747137434e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.1012660525739193,
+          "canonical_residual": 1.428191035920956e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9189630411565304,
+          "canonical_residual": 1.8022517825344586e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8143178559839725,
+          "canonical_residual": 1.544300508998786e-08
+        }
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.6420104019343853,
+          "canonical_residual": 7.196659497499258e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0915367528796196,
+          "canonical_residual": 1.4284482072884908e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.915035504847765,
+          "canonical_residual": 1.802248528887107e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.814716249704361,
+          "canonical_residual": 1.544300582898006e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "reuse",
+        "plain"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 5.684341886080802e-14,
+        "e_total_Eh": 2.6147972675971687e-12,
+        "force_Eh_per_Bohr": 3.085688093928951e-10
+      },
+      "delta_FC_bound": [
+        2.027617380020027e-09,
+        2.484873576999061e-09,
+        1.989804101517449e-09,
+        3.4126477141789356e-09
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.64491231366992,
+          "canonical_residual": 7.1974272167207864e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0930389538407326,
+          "canonical_residual": 1.4278714394883041e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9161889627575874,
+          "canonical_residual": 1.802249836868608e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8092350140213966,
+          "canonical_residual": 1.5443000871140367e-08
+        }
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.657652709633112,
+          "canonical_residual": 7.195642269530733e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0938503332436085,
+          "canonical_residual": 1.4274774473577168e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9262893237173557,
+          "canonical_residual": 1.802245641266409e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8170278444886208,
+          "canonical_residual": 1.5442999587444994e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "plain",
+        "reuse"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 5.684341886080802e-14,
+        "e_total_Eh": 9.379164112033322e-13,
+        "force_Eh_per_Bohr": 2.3314380460937034e-10
+      },
+      "delta_FC_bound": [
+        1.4324495122752941e-09,
+        1.8345852707205002e-09,
+        1.772260403779187e-09,
+        1.7771732048511853e-09
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.644446950405836,
+          "canonical_residual": 7.196842254086899e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.1000928282737732,
+          "canonical_residual": 1.429737724392699e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9265240952372551,
+          "canonical_residual": 1.8022433798808857e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8129262775182724,
+          "canonical_residual": 1.544300264402776e-08
+        }
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.6406026221811771,
+          "canonical_residual": 7.19594318160377e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0921065099537373,
+          "canonical_residual": 1.428407015932609e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.923956286162138,
+          "canonical_residual": 1.8022540178991298e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8099355697631836,
+          "canonical_residual": 1.5443003070769734e-08
+        }
+      ]
+    },
+    {
+      "order": [
+        "reuse",
+        "plain"
+      ],
+      "max_abs_delta": {
+        "e_hf_Eh": 2.842170943040401e-14,
+        "e_total_Eh": 1.3358203432289883e-12,
+        "force_Eh_per_Bohr": 2.8581181171771775e-10
+      },
+      "delta_FC_bound": [
+        1.2520233779216197e-09,
+        1.423277656764624e-09,
+        2.850270028338438e-09,
+        3.1330146871901375e-09
+      ],
+      "reuse": [
+        {
+          "line": 35,
+          "wall_s": 1.642984800040722,
+          "canonical_residual": 7.197697410310511e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0926328971982002,
+          "canonical_residual": 1.4302149648620643e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9089775681495667,
+          "canonical_residual": 1.8022514015891833e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8086367808282375,
+          "canonical_residual": 1.544299805741889e-08
+        }
+      ],
+      "plain": [
+        {
+          "line": 35,
+          "wall_s": 1.6452872417867184,
+          "canonical_residual": 7.20112152546859e-09
+        },
+        {
+          "line": 36,
+          "wall_s": 1.0969932898879051,
+          "canonical_residual": 1.4282662125914003e-08
+        },
+        {
+          "line": 39,
+          "wall_s": 0.9223702140152454,
+          "canonical_residual": 1.8022506126369464e-08
+        },
+        {
+          "line": 41,
+          "wall_s": 0.8125661984086037,
+          "canonical_residual": 1.5443008330451313e-08
+        }
+      ]
+    }
+  ]
+}

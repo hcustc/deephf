@@ -258,4 +258,40 @@ Each accepted external frame had one transport and one validation
 `get_veff` call on the same reference object. Transport uses the exported
 density. Validation rebuilds the density from the canonical orbitals.
 Their elements differed by up to 1.4e−13. The opportunity in the measured
-continuations is the second call, about 0.44–0.57% of the profiled whole step.
+continuations is the second call, about 0.44–0.66% of the profiled whole step.
+
+### Guarded reuse trial
+
+[The separate trial](fock_reuse.py) substitutes the transport potential
+only during the next stationarity check on the same DF-UHF reference.
+It checks the in-memory DF factors against a snapshot. For the density change
+after canonicalization it bounds the resulting change in any component of
+the orbital residual using the norm of those factors. The guarded residual
+must stay below 9e−8, leaving a margin to the production limit of 1e−7.
+Other cases use the ordinary Fock. The fixed-trajectory experiment runs
+the production validator and independently rebuilds the physical Fock after
+each timed step. The guards, snapshots and consumption of the witness are
+inside the wall clock. Public inference retains its ordinary validation.
+
+```bash
+python -m pytest -q tests/hf_backends/test_fock_reuse_trial.py
+python -m validation.hf_backends.fock_reuse "$ARCHIVE" --pairs 8 --output reuse-trial.json
+```
+
+On GPU4PySCF with CUDA response, Slurm job 19130 used cores 32–33 and RTX
+5090 index 4 on the same server. After a discarded warm-up pair, eight pairs
+alternated the order of the two modes. Each plain and reuse run followed all
+four geometries with a fresh initial SCF. All 32 timed external references
+admitted reuse, and every off-clock canonical residual remained below
+1.81e−8. The largest paired corrected-energy and force changes were
+2.62e−12 Ha and 6.08e−10 Ha/Bohr. The error tests cover a mismatched
+external energy, perturbed orbital energies, an occupied–virtual rotation
+and changed DF factors. Each corrupted reference was rejected.
+
+The [paired wall times](acetonitrile_n1/reuse_trial.json) averaged 4.619 s plain
+and 4.567 s with reuse per four-frame trajectory. Seven of eight pairs improved.
+The median paired saving was 27.7 ms, with individual differences from a
+227.1 ms slowdown to a 494.3 ms saving. For the three continued frames alone,
+the median saving was 16.1 ms combined and the mean was a 9.6 ms slowdown.
+These timings resolve the saved Fock call. Whole-step savings vary with the
+replay, so the guarded implementation remains a validation experiment.
