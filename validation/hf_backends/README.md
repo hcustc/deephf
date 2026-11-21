@@ -224,10 +224,11 @@ and [anchored attempt](acetonitrile_gqc_anchored.json). CUDA was unavailable on 
 
 ### RTX 5090 server
 
-All configurations below ran serially on node1 during Slurm allocation
+The first five configurations below ran serially on node1 during Slurm allocation
 19127, on AMD EPYC 9354 cores 28–29 with one compute thread and, where
 used, a single RTX 5090 (GPU index 2). The concurrent warm-start job had
-separate cores and GPU index 3. PySCF 2.14.0, GPU4PySCF 1.8.1 and
+separate cores and GPU index 3. The final row used the same node in allocation
+19132 with cores 34–35 and GPU index 5. PySCF 2.14.0, GPU4PySCF 1.8.1 and
 PyTorch 2.11.0+cu128 used the same archive, weights and code as above.
 Times are mean milliseconds. The independent first call of each process
 includes lazy initialization. Continued times pool nine frame samples
@@ -241,6 +242,7 @@ contractions. The HF nuclear gradient and DF integral derivatives use PySCF on C
 | [GPU4PySCF](acetonitrile_n1/gpu4pyscf.json) | CPU | 2878.8 | 1227.6 | 1241.0 | 50.10 | 5.44 |
 | [GPU4PySCF](acetonitrile_n1/gpu4pyscf_cuda_response.json) | CUDA | 2645.7 | 944.4 | 950.5 | 52.95 | 5.42 |
 | [GenerativeQC CUDA, anchored](acetonitrile_n1/generativeqc_cuda_anchored.json) | CPU | 1374.5 | 1089.2 | 1089.9 | 49.40 | 5.34 |
+| [GenerativeQC CUDA, anchored](acetonitrile_n1/generativeqc_cuda_response_anchored.json) | CUDA | 1158.0 | 818.8 | 823.4 | 53.23 | 5.39 |
 
 The [independent GenerativeQC CUDA run](acetonitrile_n1/generativeqc_cuda.json)
 selected the same higher-energy first root as the Mac CPU build. The anchored
