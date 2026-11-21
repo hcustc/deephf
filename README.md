@@ -56,6 +56,14 @@ For direct access to the converged HF result, call
 The returned `state.energy` is in Hartree. The AO density `state.density` is
 spin-summed for RHF and ordered `(alpha, beta)` for UHF.
 
+For a single spin-model or bare HF energy, the density-only Python path in
+`evaluate_molecule(..., energy_only=True)` can use the external engine's density
+directly. The CLI also tracks the occupied subspaces in every frame, including
+a one-frame input. With an external HF engine, `--energy-only` therefore still
+builds the PySCF Fock matrix and canonicalizes the orbitals. The inference
+provenance JSON records the effective SCF engine, device, density-fitting flag
+and auxiliary basis alongside the root-overlap history.
+
 The default conventional GPU workflow provides the direct gradient. When an
 HF engine is selected explicitly, `direct` and `zvector` use DeePHF's
 PySCF-based nuclear derivatives on that engine's occupied subspaces. Transport

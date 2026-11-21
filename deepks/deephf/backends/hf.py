@@ -10,6 +10,18 @@ from scipy.linalg import eigh
 from deepks.gpu import as_numpy, require_cuda_device
 
 
+def _native_hf_family(reference):
+    """Classify supported molecular PySCF roots after removing a DF wrapper."""
+    if isinstance(reference, (scf.hf.RHF, scf.uhf.UHF)) and hasattr(reference, "undo_df"):
+        reference = reference.undo_df()
+    if type(reference) is scf.hf.RHF:
+        return "rhf"
+    # PySCF's one-electron UHF specialization has the same two spin blocks.
+    if type(reference) in (scf.uhf.UHF, scf.uhf.HF1e):
+        return "uhf"
+    return None
+
+
 @dataclass(frozen=True)
 class HFState:
     """Accepted total energy (Hartree) and RHF or alpha/beta UHF AO density."""
@@ -41,10 +53,11 @@ class HFState:
         each occupied/virtual space. A fresh Aufbau solve could select a
         different open-shell root. No PySCF SCF iterations are performed.
         """
-        overlap = reference.get_ovlp()
-        if hasattr(reference, "xc") or not isinstance(reference, (scf.hf.RHF, scf.uhf.UHF)):
+        family = _native_hf_family(reference)
+        if hasattr(reference, "xc") or family is None:
             raise TypeError("orbital transport requires a molecular RHF or UHF reference")
-        restricted = not isinstance(reference, scf.uhf.UHF)
+        restricted = family == "rhf"
+        overlap = reference.get_ovlp()
         self.validate(reference.mol, restricted, overlap)
         blocks = self.density[None] if restricted else self.density
         weight = 2 if restricted else 1
@@ -89,13 +102,12 @@ def validate_seed(seed, target, family):
     """Check the ordered nuclei and HF Hamiltonian without converting the SCF object."""
     from ..gpu_method import gpu_reference_family
 
-    native_hf = isinstance(seed, (scf.hf.RHF, scf.uhf.UHF))
-    gpu_hf = gpu_reference_family(seed) in ("rhf", "uhf")
-    if (not (native_hf or gpu_hf) or hasattr(seed, "xc")
+    seed_family = gpu_reference_family(seed) or _native_hf_family(seed)
+    if (seed_family not in ("rhf", "uhf") or hasattr(seed, "xc")
             or not seed.converged or np.iscomplexobj(seed.mo_coeff)):
         raise ValueError("a warm start requires a converged molecular HF reference")
     source, mol = seed.mol, target.mol
-    if (family not in ("rhf", "uhf") or (seed.mo_occ.ndim == 1) != (family == "rhf")
+    if (family != seed_family or (seed.mo_occ.ndim == 1) != (family == "rhf")
             or source.charge != mol.charge or source.spin != mol.spin or source.cart != mol.cart
             or source.omega != mol.omega or source.has_ecp() or mol.has_ecp()
             or source.pseudo or mol.pseudo or source.nucmod or mol.nucmod
@@ -121,51 +133,64 @@ def projected_seed(seed, mol):
     return scf.addons.project_dm_nr2nr(seed.mol, density, mol)
 
 
+def _spin_order(density, spin):
+    """Swap UHF blocks between PySCF alpha/beta and GenerativeQC majority/minority order."""
+    return density[::-1] if spin < 0 else density
+
+
 def _seeded_generativeqc(calc, mol, seed):
     """Use the public HF warm-state C ABI on a single Python prepared batch.
 
     Supplies the source geometry to the native metric checks. Only the density
     returned after a successful target SCF is used for DeePHF.
     """
-    from generativeqc import _native
+    compatibility_error = (
+        "GenerativeQC warm starts require compatible Python bindings and a native library "
+        "with the HF warm-state ABI. See validation/hf_backends/README.md for the tested build."
+    )
+    try:
+        from generativeqc._native import ABI_VERSION, HfWarmState, check
+        prepare_batch = calc.prepare_batch
+    except (ImportError, AttributeError) as error:
+        raise RuntimeError(compatibility_error) from error
 
-    xyz = np.ascontiguousarray(seed.mol.atom_coords())
+    xyz = np.ascontiguousarray(seed.mol.atom_coords(), dtype=np.float64)
     target_xyz = mol.atom_coords()
-    density = np.ascontiguousarray(as_numpy(seed.make_rdm1()), dtype=np.float64)
-    if mol.spin < 0:
-        density = np.ascontiguousarray(density[::-1])
+    density = np.ascontiguousarray(_spin_order(as_numpy(seed.make_rdm1()), mol.spin), dtype=np.float64)
     pointer = ctypes.POINTER(ctypes.c_double)
 
     def descriptor():
-        return _native.HfWarmState(struct_size=ctypes.sizeof(_native.HfWarmState),
-                                   abi_version=_native.ABI_VERSION)
+        return HfWarmState(struct_size=ctypes.sizeof(HfWarmState), abi_version=ABI_VERSION)
 
     atoms = list(zip(mol.atom_charges().tolist(), xyz))
-    with calc.prepare_batch([atoms], charges=[mol.charge], multiplicities=[abs(mol.spin) + 1],
-                            warm_start=True) as batch:
+    with prepare_batch([atoms], charges=[mol.charge], multiplicities=[abs(mol.spin) + 1],
+                       warm_start=True) as batch:
         # GenerativeQC exposes source geometry and spin-resolved restart
         # buffers through the native handle of its Python prepared owner.
-        api, handle = batch._library, batch._batch
+        try:
+            api, handle = batch._library, batch._batch
+            restore = api.generativeqc_batch_restore_hf_warm_states
+            get = api.generativeqc_batch_get_hf_warm_state
+        except AttributeError as error:
+            raise RuntimeError(compatibility_error) from error
         incoming = descriptor()
         incoming.density, incoming.density_count = density.ctypes.data_as(pointer), density.size
         incoming.coordinates, incoming.coordinate_count = xyz.ctypes.data_as(pointer), xyz.size
         incoming.present, incoming.energy = 1, float(seed.e_tot)
-        _native.check(api, api.generativeqc_batch_restore_hf_warm_states(
-            handle, ctypes.byref(incoming), 1))
+        check(api, restore(handle, ctypes.byref(incoming), 1))
         result = batch.execute([target_xyz], properties=("energy",), strict=True).items[0]
         if not result.converged or not result.warm_start_used or result.warm_start_fallback:
             raise RuntimeError("GenerativeQC did not converge using the requested HF seed")
         outgoing = descriptor()
-        get = api.generativeqc_batch_get_hf_warm_state
-        _native.check(api, get(handle, 0, ctypes.byref(outgoing)))
+        check(api, get(handle, 0, ctypes.byref(outgoing)))
         if not outgoing.present or outgoing.density_count != density.size or outgoing.coordinate_count != xyz.size:
             raise RuntimeError("GenerativeQC returned incompatible warm-state buffers")
         final, geometry = np.empty_like(density), np.empty_like(xyz)
         outgoing.density, outgoing.coordinates = final.ctypes.data_as(pointer), geometry.ctypes.data_as(pointer)
-        _native.check(api, get(handle, 0, ctypes.byref(outgoing)))
+        check(api, get(handle, 0, ctypes.byref(outgoing)))
         if not np.allclose(geometry, target_xyz, rtol=0, atol=1e-12):
             raise RuntimeError("GenerativeQC returned a density at a different geometry")
-    return HFState(result.energy, final[::-1].copy() if mol.spin < 0 else final)
+    return HFState(result.energy, np.ascontiguousarray(_spin_order(final, mol.spin)))
 
 
 def _generativeqc(reference, restricted, device, controls, seed):
@@ -208,10 +233,8 @@ def _generativeqc(reference, restricted, device, controls, seed):
     else:
         if spin is None:
             raise ValueError("GenerativeQC did not return the UHF spin density")
-        if mol.spin < 0:
-            spin = -spin
-        density = np.stack(((total + spin) / 2, (total - spin) / 2))
-    return HFState(result.energy, np.asarray(density))
+        density = _spin_order(np.stack(((total + spin) / 2, (total - spin) / 2)), mol.spin)
+    return HFState(result.energy, np.ascontiguousarray(density))
 
 
 def solve_external(reference, family, engine, device, controls, seed, *, dm0=None):
@@ -231,11 +254,14 @@ def solve_external(reference, family, engine, device, controls, seed, *, dm0=Non
             gpu.with_df.auxbasis = df.addons.make_auxbasis(reference.mol)
         # GPU4PySCF tests the norm over all orbital gradients. On DF-UHF
         # this can plateau at a few 1e-8 even for a stationary FP64 root.
-        gpu.conv_tol_grad = controls.get("conv_tol_grad", 5e-8)
+        if not restricted and getattr(gpu, "with_df", None) is not None and "conv_tol_grad" not in controls:
+            gpu.conv_tol_grad = 5e-8
+        else:
+            gpu.conv_tol_grad = reference.conv_tol_grad
         gpu.kernel(dm0=dm0 if seed is None else projected_seed(seed, reference.mol))
         if not gpu.converged:
             raise RuntimeError("GPU4PySCF SCF did not converge")
-        state = HFState(float(gpu.e_tot), gpu.make_rdm1().get())
+        state = HFState(float(gpu.e_tot), as_numpy(gpu.make_rdm1()))
     elif engine == "generativeqc":
         if device not in ("cpu", "cuda"):
             raise ValueError("GenerativeQC scf_device must be cpu or cuda")

@@ -23,6 +23,7 @@ from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
 from .backends.hf import HFState, build_hf_state, build_spin_reference, projected_seed, validate_seed
 from .df_spin import DFSpinDeePHF
+from .force_data import _json_safe
 from .method import DeePHF
 from .contracts import (
     RootContinuityError,
@@ -610,6 +611,29 @@ def _model_target_provenance(model):
     return {"identity": target, "fingerprint": fingerprint}
 
 
+def _scf_provenance(reference, backend, device, density_fit):
+    """Record the effective solver and JK fitting basis of the accepted trajectory."""
+    if backend is None:
+        backend = "gpu4pyscf" if is_gpu_reference(reference) else "pyscf"
+    auxbasis = None
+    if density_fit:
+        fitting = reference.with_df
+        if fitting.auxmol is not None:
+            auxbasis = fitting.auxmol.basis
+        elif fitting.auxbasis is not None:
+            auxbasis = fitting.auxbasis
+        else:
+            from pyscf.df.addons import make_auxbasis
+
+            auxbasis = make_auxbasis(reference.mol)
+    return {
+        "scf_backend": backend,
+        "scf_device": device or ("cpu" if backend == "pyscf" else "cuda"),
+        "density_fit": density_fit,
+        "auxbasis": _json_safe(auxbasis),
+    }
+
+
 def _write_inference_provenance(directory, payload) -> None:
     path = Path(directory)
     path.mkdir(parents=True, exist_ok=True)
@@ -719,6 +743,7 @@ def main(
                 "version": 1,
             },
             "reference_family": sequence.family.upper(),
+            **_scf_provenance(native_reference, scf_backend, scf_device, density_fit),
             "root_overlap_tolerance": sequence.root_overlap_tolerance,
             "frames": sequence.records,
         }

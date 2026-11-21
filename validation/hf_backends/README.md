@@ -13,19 +13,19 @@ and GenerativeQC's RHF/UHF Fock action against the direct relaxed Jacobian.
 python -m pytest -q tests/hf_backends
 ```
 
-After integration with `master` at `7e33d2a`, all 1,028 tests passed on an
-RTX 5090 with the locked Linux environment (PySCF 2.14.0, GPU4PySCF 1.8.1,
-PyTorch 2.11.0+cu128) and the optional GenerativeQC library. This includes
-all 34 backend tests. They cover two-frame CLI root tracking with each engine
-and continuation from a GPU-native HF reference.
+With the review fixes on top of `master` at `7e33d2a`, all 1,049 tests
+passed on an RTX 5090 with the locked Linux environment (PySCF 2.14.0,
+GPU4PySCF 1.8.1, PyTorch 2.11.0+cu128) and the optional GenerativeQC
+library. The 55 HF backend tests include two-frame CLI root tracking,
+continuation from a GPU-native reference, and negative-spin UHF cold and
+warm starts with GenerativeQC on both CPU and CUDA.
 
 The optional-engine tests run when the engine is importable. CUDA tests use
 a visible GPU and a CUDA-enabled Torch installation. The original backend comparison
 used an RTX 5090, GPU4PySCF 1.7.4, and a GenerativeQC CUDA
 build with native source identity
 `3b31877336dd65af68a072e89d993f244138aa6e53dc455b8d33b3cb954697cc`.
-The integrated test run with PySCF 2.14 passed all 29 cases, including
-conventional CorrNet gradients. The following methanol measurements used
+The following methanol measurements used
 PySCF 2.13.1 and the frozen joint-B spin model. The first four columns of
 differences give maxima over both electronic states and all components.
 The last column gives the signed change in the predicted ionization energy
@@ -42,6 +42,10 @@ had 923 passes, 23 skips and one failure. The base commit `8716f1d` had
 `test_spin_resolved_density_response_matches_fresh_uks[0.0001-2e-07]`.
 On the local macOS host, both revisions produced the same 49 failures and
 206 errors by test ID. The candidate had 669 passes and the base had 662.
+
+The tested GenerativeQC Python FockPlan accepts and returns NumPy arrays.
+On CUDA, each adjoint iteration transfers its trial density to host memory
+and the returned J/K response to the torch device. The timings below cover energy predictions only.
 
 ## Timing complete energy predictions
 

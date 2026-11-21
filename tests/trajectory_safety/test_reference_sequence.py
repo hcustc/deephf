@@ -248,6 +248,10 @@ def test_cli_persists_root_lineage_and_force_checkpoint_target(tmp_path, monkeyp
     )
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     assert provenance["reference_family"] == "RHF"
+    assert provenance["scf_backend"] == "gpu4pyscf"
+    assert provenance["scf_device"] == "cuda"
+    assert provenance["density_fit"] is False
+    assert provenance["auxbasis"] is None
     assert len(provenance["frames"]) == 2
     assert provenance["frames"][0]["initial_guess_source"] == "independent"
     assert provenance["frames"][1]["initial_guess_source"] == "previous_density"

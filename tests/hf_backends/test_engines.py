@@ -8,7 +8,7 @@ import pytest
 import torch
 from pyscf import gto, scf
 
-from deepks.deephf import build_reference, evaluate_molecule
+from deepks.deephf import build_hf_state, build_reference, evaluate_molecule
 from deepks.deephf.backends.hf import HFState
 from deepks.model import SpinCorrNet
 
@@ -141,6 +141,10 @@ def test_cli_follows_selected_engine_across_frames(tmp_path, monkeypatch, engine
     ]
     np.testing.assert_allclose(results["e_tot"], expected, atol=1e-8, rtol=0)
     records = json.loads((Path(directory) / workflow.INFERENCE_PROVENANCE_FILENAME).read_text())
+    assert records["scf_backend"] == engine
+    assert records["scf_device"] == device
+    assert records["density_fit"] is True
+    assert records["auxbasis"] == "weigend"
     first, second = records["frames"]
     assert second["parent_reference_state_fingerprint"] == first["reference_state_fingerprint"]
     assert second["minimum_occupied_overlap"] > 0.99
@@ -176,6 +180,24 @@ def test_restart_at_displaced_geometry(engine, device, charge):
     np.testing.assert_allclose(root.make_rdm1(), baseline.make_rdm1(), atol=8e-7, rtol=0)
     with pytest.raises(ValueError, match="auxiliary basis mismatch"):
         build_reference(target, **{**options, "auxbasis": "weigend"}, initial_reference=seed)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_generativeqc_negative_spin_cold_and_warm_start(device):
+    require_engine("generativeqc", device)
+    mol = gto.M(atom="O 0 0 0; H .94 0 0; H -.23 .85 .13", charge=1, spin=-1,
+                basis="sto-3g", verbose=0)
+    options = dict(density_fit=True, auxbasis="def2-svp")
+    seed = build_reference(mol, "uhf", **options)
+    xyz = mol.atom_coords()
+    xyz[1, 0] += 2e-4
+    target = mol.set_geom_(xyz, unit="Bohr", inplace=False)
+    expected = build_reference(target, "uhf", initial_reference=seed, **options)
+    for initial in (None, seed):
+        state = build_hf_state(target, "uhf", scf_backend="generativeqc", scf_device=device,
+                               initial_reference=initial, **options)
+        np.testing.assert_allclose(state.energy, expected.e_tot, atol=1e-8, rtol=0)
+        np.testing.assert_allclose(state.density, expected.make_rdm1(), atol=8e-7, rtol=0)
 
 
 def test_default_gpu_root_can_seed_conventional_and_pyscf_solvers(monkeypatch):
