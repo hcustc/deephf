@@ -109,7 +109,8 @@ from .zvector import (
     UHFDeePHFZVectorGradients,
     UKSDeePHFZVectorGradients,
 )
-from .workflow import build_reference, evaluate_molecule, make_deephf
+from .backends.hf import HFState
+from .workflow import build_hf_state, build_reference, evaluate_molecule, make_deephf
 
 __all__ = [
     "DeePHF",
@@ -199,6 +200,8 @@ __all__ = [
     "validate_uks_reference",
     "write_rhf_force_dataset",
     "build_reference",
+    "build_hf_state",
+    "HFState",
     "evaluate_molecule",
     "make_deephf",
 ]

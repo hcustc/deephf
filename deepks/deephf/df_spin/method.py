@@ -1,5 +1,6 @@
 """Analytic gradients and force-supervision frames for local-spin DF-HF."""
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import numpy as np
@@ -8,42 +9,10 @@ from pyscf import scf
 
 from deepks.descriptor import AtomicDensityDescriptor, projected_density, validate_differentiability
 
+from ..backends.generativeqc_response import generativeqc_response
+from ..backends.hf import build_spin_reference as build_spin_reference
 from .integrals import DFFockDerivative, auxiliary_molecule
 from .orbitals import DFOrbitalResponse
-
-
-def build_spin_reference(
-    molecule, family, *, density_fit, scf_args=None, dft_args=None, dm0=None, verbose=0
-):
-    """Converge the native PySCF HF root consumed by spin checkpoints."""
-    if not isinstance(family, str) or family.lower() not in {"rhf", "uhf"} or dft_args is not None:
-        raise ValueError("spin checkpoints require an RHF or UHF reference without DFT controls")
-    family = family.lower()
-    if family == "rhf" and molecule.spin != 0:
-        raise ValueError("the strict RHF family requires molecular spin zero")
-    reference = scf.RHF(molecule) if family == "rhf" else scf.UHF(molecule)
-    expected_type = scf.hf.RHF if family == "rhf" else scf.uhf.UHF
-    if type(reference) is not expected_type:
-        raise TypeError(f"the requested {family.upper()} constructor returned {type(reference).__name__}")
-    if density_fit:
-        reference = reference.density_fit()
-    controls = {
-        "conv_tol": 1e-12 if density_fit else 1e-13,
-        "conv_tol_grad": 1e-8 if density_fit else 1e-10,
-        "conv_tol_cpscf": 1e-12,
-        "max_cycle": 100,
-    }
-    if scf_args is not None:
-        supported = controls.keys() | {"diis_space", "level_shift", "direct_scf", "conv_check"}
-        unknown = sorted(set(scf_args) - supported)
-        if unknown:
-            raise ValueError("unsupported strict reference controls: " + ", ".join(unknown))
-        controls.update(scf_args)
-    reference.set(verbose=verbose, **controls)
-    reference.kernel(dm0=dm0)
-    if not reference.converged:
-        raise RuntimeError(f"the native {family.upper()} reference did not converge")
-    return reference
 
 
 def _validate_reference(reference):
@@ -180,8 +149,8 @@ class DFSpinDeePHF:
         """Evaluate immediately after construction or validation of the current root."""
         if backend == "direct":
             return -self._force_frame_on_validated_root().forces(self.model).detach().cpu().numpy()
-        if backend != "zvector":
-            raise ValueError("the spin gradient backend must be direct or zvector")
+        if backend not in ("zvector", "generativeqc-zvector"):
+            raise ValueError(f"unknown spin gradient backend: {backend}")
         ref = self.reference
         descriptor = self._descriptors()
         density = torch.as_tensor(np.asarray(ref.make_rdm1())).requires_grad_()
@@ -200,15 +169,17 @@ class DFSpinDeePHF:
             product = derivative.numpy() * slope.numpy()[None, ...]
             np.add.at(explicit, list(descriptor.descriptor_atom_indices), product.sum((1, 3)).T)
             np.add.at(explicit, ao_atoms, -product.sum((2, 3)).T)
-        gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential)
+        response = (generativeqc_response(ref, self.device) if backend == "generativeqc-zvector"
+                    else nullcontext(DFOrbitalResponse(ref, self.device)))
+        with response as orbital:
+            gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential, orbital)
         if not np.isfinite(gradient).all():
             raise ValueError("nonfinite DF-HF/model gradient")
         return gradient
 
-    def _orbital_gradient(self, potential):
+    def _orbital_gradient(self, potential, orbital):
         """Contract the relaxed density motion, including its AO-metric gauge."""
         ref = self.reference
-        orbital = DFOrbitalResponse(ref, self.device)
         potentials = potential.reshape(-1, ref.mol.nao, ref.mol.nao).to(self.device)
         rhs = [
             v.T @ (p + p.T) @ o for v, p, o in zip(orbital.virtual, potentials, orbital.occupied)

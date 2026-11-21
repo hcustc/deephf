@@ -21,7 +21,9 @@ from deepks.model.model import CorrNet
 from deepks.model.spin import SpinCorrNet
 from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
-from .df_spin.method import DFSpinDeePHF, build_spin_reference
+from .backends.hf import HFState, build_hf_state, build_spin_reference, projected_seed, validate_seed
+from .df_spin import DFSpinDeePHF
+from .force_data import _json_safe
 from .method import DeePHF
 from .contracts import (
     RootContinuityError,
@@ -159,14 +161,23 @@ def make_deephf(
     )
 
 
-def _reference_builder(model, density_fit, energy_only):
-    if isinstance(model, SpinCorrNet):
-        if not energy_only and not density_fit:
-            raise ValueError("spin forces require density_fit=True (--density-fit)")
-        return partial(build_spin_reference, density_fit=density_fit)
-    if density_fit:
-        raise ValueError("density_fit in this workflow requires a SpinCorrNet checkpoint")
-    return build_reference
+def _reference_builder(
+    model, density_fit, energy_only, *, scf_backend, scf_device, auxbasis, density_only=False,
+):
+    """Select a solver before SCF, keeping the conventional GPU workflow as its default."""
+    spin_model = isinstance(model, SpinCorrNet)
+    bare_energy = model is None and energy_only
+    if spin_model and not energy_only and not density_fit:
+        raise ValueError("spin forces require density_fit=True (--density-fit)")
+    if density_fit and not (spin_model or bare_energy):
+        raise ValueError("density_fit requires a SpinCorrNet checkpoint or a bare HF energy")
+    if spin_model or density_fit or scf_backend is not None:
+        return partial(
+            build_spin_reference, density_fit=density_fit, auxbasis=auxbasis,
+            scf_backend="pyscf" if scf_backend is None else scf_backend, scf_device=scf_device,
+            density_only=density_only and energy_only and (spin_model or bare_energy),
+        )
+    return partial(build_reference, auxbasis=auxbasis, scf_device=scf_device)
 
 
 def build_reference(
@@ -178,13 +189,23 @@ def build_reference(
     dm0=None,
     verbose=0,
     density_fit=False,
+    auxbasis=None,
+    scf_backend=None,
+    scf_device=None,
+    initial_reference=None,
 ):
-    """Converge a GPU4PySCF reference or an explicit native DF-HF spin root."""
-    if density_fit:
+    """Converge a conventional GPU reference or transport the selected HF engine's root."""
+    if density_fit or scf_backend is not None:
         return build_spin_reference(
-            molecule, family, density_fit=True, scf_args=scf_args,
+            molecule, family, density_fit=density_fit, auxbasis=auxbasis, scf_args=scf_args,
             dft_args=dft_args, dm0=dm0, verbose=verbose,
+            scf_backend="pyscf" if scf_backend is None else scf_backend,
+            scf_device=scf_device, initial_reference=initial_reference,
         )
+    if auxbasis is not None:
+        raise ValueError("auxbasis requires density_fit=True")
+    if scf_device not in (None, "cuda"):
+        raise ValueError("the default GPU4PySCF workflow requires scf_device=cuda")
     require_cuda_device()
     import cupy
     from gpu4pyscf import dft as gpu_dft
@@ -242,6 +263,11 @@ def build_reference(
     active_dft_args = None
     if family in {"rks", "uks"}:
         active_dft_args = _configure_gpu_dft(reference, molecule, dft_args)
+    if initial_reference is not None:
+        if dm0 is not None:
+            raise ValueError("supply only one of dm0 and initial_reference")
+        validate_seed(initial_reference, reference, family)
+        dm0 = projected_seed(initial_reference, molecule)
     if dm0 is not None:
         initial_density = cupy.asarray(dm0)
         expected_shape = (
@@ -304,16 +330,32 @@ def evaluate_molecule(
     verbose=0,
     energy_only=False,
     density_fit=False,
+    auxbasis=None,
+    scf_backend=None,
+    scf_device=None,
+    initial_reference=None,
 ):
     """Evaluate one state and optionally omit its descriptor and derivatives."""
-    build = _reference_builder(model, density_fit, energy_only)
+    if isinstance(model, SpinCorrNet):
+        _check_spin_projector(model, projector_basis)
+    build = _reference_builder(
+        model, density_fit, energy_only, scf_backend=scf_backend, scf_device=scf_device,
+        auxbasis=auxbasis, density_only=True,
+    )
     reference = build(
         molecule,
         family,
         scf_args=scf_args,
         dft_args=dft_args,
+        initial_reference=initial_reference,
         verbose=verbose,
     )
+    if isinstance(reference, HFState):
+        correction = 0.0
+        if model is not None:
+            model.to("cpu" if device is None else device).eval()
+            correction = model.correction_from_density(molecule, reference.density)
+        return _state_energies(reference.energy, correction)
     return _evaluate_reference(
         reference,
         model,
@@ -324,6 +366,15 @@ def evaluate_molecule(
         adjoint_options=adjoint_options,
         energy_only=energy_only,
     )
+
+
+def _state_energies(base, correction):
+    return {
+        "converged": np.asarray(True),
+        "e_base": np.asarray(base),
+        "e_corr": np.asarray(correction),
+        "e_tot": np.asarray(base + correction),
+    }
 
 
 def _evaluate_reference(
@@ -338,16 +389,13 @@ def _evaluate_reference(
     energy_only=False,
 ):
     """Evaluate one already converged native reference without rebuilding it."""
+    if energy_only and model is None and not is_gpu_reference(reference):
+        return _state_energies(reference.e_tot, 0.0)
     if isinstance(model, SpinCorrNet):
         _check_spin_projector(model, projector_basis)
         model.to("cpu" if device is None else device).eval()
         correction = model.correction_energy(reference)
-        result = {
-            "converged": np.asarray(reference.converged),
-            "e_base": np.asarray(reference.e_tot),
-            "e_corr": np.asarray(correction),
-            "e_tot": np.asarray(reference.e_tot + correction),
-        }
+        result = _state_energies(reference.e_tot, correction)
         if not energy_only:
             method = make_deephf(
                 reference, model, device=device, response_options=response_options,
@@ -433,6 +481,7 @@ class _ReferenceSequence:
         dft_args=None,
         root_overlap_tolerance=0.5,
         build=None,
+        seed_with_reference=False,
         verbose=0,
     ):
         if type(family) is not str or family.lower() not in REFERENCE_FAMILIES:
@@ -445,6 +494,7 @@ class _ReferenceSequence:
             owner="trajectory",
         )
         self._build_reference = build_reference if build is None else build
+        self._seed_with_reference = seed_with_reference
         self.verbose = verbose
         self._previous_reference = None
         self._system_fingerprint = None
@@ -464,13 +514,19 @@ class _ReferenceSequence:
             raise RootContinuityError(
                 "the molecular system or AO basis changed within one trajectory"
             )
+        # GenerativeQC validates both the previous density and its source geometry.
+        seed = (
+            {"initial_reference": self._previous_reference}
+            if self._seed_with_reference
+            else {"dm0": self._previous_density}
+        )
         reference = self._build_reference(
             molecule,
             self.family,
             scf_args=self.scf_args,
             dft_args=self.dft_args,
-            dm0=self._previous_density,
             verbose=self.verbose,
+            **seed,
         )
         occupations = as_numpy(reference.mo_occ)
         candidate_occupied = occupied_coefficients(
@@ -497,7 +553,7 @@ class _ReferenceSequence:
                 reference.mol,
                 candidate_occupied,
             )
-            initial_guess_source = "previous_density"
+            initial_guess_source = "previous_reference" if self._seed_with_reference else "previous_density"
         minimum_overlap = float(min(overlaps))
         if minimum_overlap < self.root_overlap_tolerance:
             raise RootContinuityError(
@@ -555,6 +611,29 @@ def _model_target_provenance(model):
     return {"identity": target, "fingerprint": fingerprint}
 
 
+def _scf_provenance(reference, backend, device, density_fit):
+    """Record the effective solver and JK fitting basis of the accepted trajectory."""
+    if backend is None:
+        backend = "gpu4pyscf" if is_gpu_reference(reference) else "pyscf"
+    auxbasis = None
+    if density_fit:
+        fitting = reference.with_df
+        if fitting.auxmol is not None:
+            auxbasis = fitting.auxmol.basis
+        elif fitting.auxbasis is not None:
+            auxbasis = fitting.auxbasis
+        else:
+            from pyscf.df.addons import make_auxbasis
+
+            auxbasis = make_auxbasis(reference.mol)
+    return {
+        "scf_backend": backend,
+        "scf_device": device or ("cpu" if backend == "pyscf" else "cuda"),
+        "density_fit": density_fit,
+        "auxbasis": _json_safe(auxbasis),
+    }
+
+
 def _write_inference_provenance(directory, payload) -> None:
     path = Path(directory)
     path.mkdir(parents=True, exist_ok=True)
@@ -600,6 +679,9 @@ def main(
     verbose=0,
     energy_only=False,
     density_fit=False,
+    auxbasis=None,
+    scf_backend=None,
+    scf_device=None,
 ):
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
@@ -610,7 +692,10 @@ def main(
             model = SpinCorrNet.load_dict(checkpoint)
         else:
             model = CorrNet.load_dict(checkpoint, strict=True).double().eval()
-    build = _reference_builder(model, density_fit, energy_only)
+    build = _reference_builder(
+        model, density_fit, energy_only, scf_backend=scf_backend, scf_device=scf_device,
+        auxbasis=auxbasis,
+    )
     mol_args = {} if mol_args is None else dict(mol_args)
     outputs = []
     for system_path in load_sys_paths(systems):
@@ -618,6 +703,7 @@ def main(
         sequence = _ReferenceSequence(
             reference,
             build=build,
+            seed_with_reference=scf_backend == "generativeqc",
             scf_args=scf_args,
             dft_args=dft_args,
             root_overlap_tolerance=root_overlap_tolerance,
@@ -657,6 +743,7 @@ def main(
                 "version": 1,
             },
             "reference_family": sequence.family.upper(),
+            **_scf_provenance(native_reference, scf_backend, scf_device, density_fit),
             "root_overlap_tolerance": sequence.root_overlap_tolerance,
             "frames": sequence.records,
         }
@@ -671,6 +758,7 @@ def main(
 
 __all__ = [
     "INFERENCE_PROVENANCE_FILENAME",
+    "build_hf_state",
     "build_reference",
     "evaluate_molecule",
     "main",

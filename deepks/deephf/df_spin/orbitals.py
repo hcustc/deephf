@@ -22,7 +22,7 @@ class DFOrbitalResponse:
     the nominal molecular spin is zero.
     """
 
-    def __init__(self, reference, device):
+    def __init__(self, reference, device, *, prepare_factors=True):
         self.reference = reference
         self.device = torch.device(device)
         self.restricted = np.ndim(reference.mo_occ) == 1
@@ -38,6 +38,12 @@ class DFOrbitalResponse:
             self.energies.append(self.tensor(e[mask]))
             self.gaps.append(self.tensor(e[~mask, None] - e[mask]))
 
+        self.sizes = [gap.numel() for gap in self.gaps]
+        self.diagonal = torch.cat([g.flatten() for g in self.gaps])
+        if not prepare_factors:
+            # External Fock operators supply both VO and OO responses directly.
+            return
+
         # Only MO blocks are retained after transforming the fitted AO factors.
         packed = reference.with_df.loop()
         parts = [[] for _ in self.gaps]
@@ -46,9 +52,7 @@ class DFOrbitalResponse:
             for matrices, o, v in zip(parts, self.occupied, self.virtual):
                 matrices.append((o.T @ factors @ o, v.T @ factors @ o, v.T @ factors @ v))
         self.blocks = [tuple(torch.cat(columns) for columns in zip(*rows)) for rows in parts]
-        self.sizes = [gap.numel() for gap in self.gaps]
         self.vo = torch.cat([vo.flatten(1) for _, vo, _ in self.blocks], dim=1)
-        self.diagonal = torch.cat([g.flatten() for g in self.gaps])
 
     def tensor(self, value):
         return torch.as_tensor(np.ascontiguousarray(value), device=self.device)

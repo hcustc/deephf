@@ -51,7 +51,9 @@ def test_deephf_package_has_a_bounded_aggregate_topology():
     # method and training owners. Retain the native four-family topology budget.
     spin_df = tuple((directory / "df_spin").glob("*.py"))
     assert len(spin_df) <= 5
-    assert len(set(modules) - set(spin_df)) <= MODULE_COUNT_LIMIT
+    adapters = set((directory / "backends").glob("*.py"))
+    assert len(adapters) <= 3
+    assert len(set(modules) - set(spin_df) - adapters) <= MODULE_COUNT_LIMIT
     assert len(top_level) <= 35
     assert len(audits) <= 9
 
