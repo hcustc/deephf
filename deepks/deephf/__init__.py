@@ -88,7 +88,8 @@ from .zvector import (
     UKSDeePHFZVectorGradients,
 )
 from .df_spin import DFSpinDeePHF, SpinForceFrame, SpinTrainingState, device_df_jk, spin_energy_force_loss
-from .workflow import build_reference, evaluate_molecule, make_deephf
+from .backends.hf import HFState
+from .workflow import build_hf_state, build_reference, evaluate_molecule, make_deephf
 
 __all__ = [
     "DeePHF",
@@ -167,6 +168,8 @@ __all__ = [
     "validate_uks_reference",
     "write_rhf_force_dataset",
     "build_reference",
+    "build_hf_state",
+    "HFState",
     "evaluate_molecule",
     "make_deephf",
 ]

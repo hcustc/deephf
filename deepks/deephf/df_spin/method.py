@@ -1,5 +1,6 @@
 """Analytic gradients and force-supervision frames for local-spin DF-HF."""
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import numpy as np
@@ -8,6 +9,7 @@ from pyscf import scf
 
 from deepks.descriptor import AtomicDensityDescriptor, projected_density, validate_differentiability
 
+from ..backends.generativeqc_response import generativeqc_response
 from .integrals import DFFockDerivative, auxiliary_molecule
 from .orbitals import DFOrbitalResponse
 
@@ -140,8 +142,8 @@ class DFSpinDeePHF:
         """Return the total energy gradient in Hartree/Bohr on the current root."""
         if backend == "direct":
             return -self.force_frame().forces(self.model).detach().cpu().numpy()
-        if backend != "zvector":
-            raise ValueError("the spin gradient backend must be direct or zvector")
+        if backend not in ("zvector", "generativeqc-zvector"):
+            raise ValueError("unknown spin gradient backend: " + str(backend))
         _validate_local_model(self.model)
         ref = self.reference
         _validate_reference(ref)
@@ -162,15 +164,17 @@ class DFSpinDeePHF:
             product = derivative.numpy() * slope.numpy()[None, ...]
             np.add.at(explicit, list(descriptor.descriptor_atom_indices), product.sum((1, 3)).T)
             np.add.at(explicit, ao_atoms, -product.sum((2, 3)).T)
-        gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential)
+        response = (generativeqc_response(ref, self.device) if backend == "generativeqc-zvector"
+                    else nullcontext(DFOrbitalResponse(ref, self.device)))
+        with response as orbital:
+            gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential, orbital)
         if not np.isfinite(gradient).all():
             raise ValueError("nonfinite DF-HF/model gradient")
         return gradient
 
-    def _orbital_gradient(self, potential):
+    def _orbital_gradient(self, potential, orbital):
         """Contract the relaxed density motion, including its AO-metric gauge."""
         ref = self.reference
-        orbital = DFOrbitalResponse(ref, self.device)
         potentials = potential.reshape(-1, ref.mol.nao, ref.mol.nao).to(self.device)
         rhs = [
             v.T @ (p + p.T) @ o for v, p, o in zip(orbital.virtual, potentials, orbital.occupied)

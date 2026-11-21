@@ -205,8 +205,12 @@ def deephf_cli(args=None):
                         help="use DF J and K for a single-state spin checkpoint")
     parser.add_argument("--energy-only", action="store_true",
                         help="evaluate single-state energies without gradients")
-    parser.add_argument("-b", "--backend", choices=("direct", "zvector"),
+    parser.add_argument("-b", "--backend", choices=("direct", "zvector", "generativeqc-zvector"),
                         help="analytic-gradient backend")
+    parser.add_argument("--scf-backend", choices=("pyscf", "gpu4pyscf", "generativeqc"),
+                        help="engine used to converge the HF state")
+    parser.add_argument("--scf-device", choices=("cpu", "cuda"), help="SCF engine device")
+    parser.add_argument("--auxbasis", help="auxiliary basis for density-fitted J and K")
     parser.add_argument("-B", "--basis", help="AO basis")
     parser.add_argument("-P", "--projector-basis", help="projector basis")
     parser.add_argument("-D", "--device", help="model device")

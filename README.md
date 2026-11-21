@@ -31,6 +31,47 @@ The public inference result contains:
 - `gradient`: complete analytic nuclear gradient in `Eh/Bohr`.
 - `force`: `-gradient` in `Eh/Bohr`.
 
+### HF engines
+
+Select the SCF engine independently of the neural-network device and the
+gradient algorithm. PySCF is the default. GPU4PySCF uses CUDA. GenerativeQC
+supports CPU and CUDA and defaults to CUDA. Install the selected optional
+engine in the same environment as DeePHF.
+
+```bash
+deepks deephf cation.yaml --scf-backend generativeqc --scf-device cuda --energy-only
+deepks deephf cation.yaml --scf-backend gpu4pyscf --backend zvector
+```
+
+For a spin checkpoint, set `reference: uhf` and `density_fit: true` in the
+cation configuration, and supply its charge and PySCF spin (twice the spin
+projection). Each engine uses the molecule's orbital basis and the selected
+JK fitting basis. Set `auxbasis` to override PySCF's fitting-basis choice for
+all engines. The frozen network takes the same projected AO densities.
+
+For direct access to the converged HF result, call
+`build_hf_state(mol, "uhf", density_fit=True, scf_backend="generativeqc")`.
+The returned `state.energy` is in Hartree. The AO density `state.density` is
+spin-summed for RHF and ordered `(alpha, beta)` for UHF.
+
+The `direct` and `zvector` gradients use DeePHF's PySCF-based nuclear
+derivatives on the SCF engine's occupied subspaces. Transport checks the
+energy, density and orbital stationarity without another SCF solve. The
+optional `generativeqc-zvector` algorithm evaluates the J/K action in the
+orbital adjoint with GenerativeQC. Its FockPlan accepts orbital and auxiliary
+shells through f. For def2-SVP calculations whose JK fitting basis contains g
+shells, use `zvector`. Projection and nuclear integral derivatives still use
+PySCF. See the [numerical checks and timings](validation/hf_backends/README.md).
+
+For a multi-root system, the Python APIs `build_hf_state`, `build_reference` and
+`evaluate_molecule` accept `initial_reference`, a converged RHF/UHF reference
+at the current or a nearby geometry with the same ordered atoms, charge, spin
+and basis sets. A seed selects an initial guess. Check occupied-subspace
+overlaps across geometries when following a specific branch. GenerativeQC
+warm starts use its versioned native HF warm-state API and the prepared
+batch handle from its Python bindings. The validation notes identify the
+tested native build.
+
 ### RHF relaxed-force data and training
 
 The strict RHF force-training workflow generates model-independent direct-response data and trains a correction model against both energy and force targets.

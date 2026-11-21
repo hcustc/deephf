@@ -11,6 +11,7 @@ from deepks.model.model import CorrNet
 from deepks.model.spin import SpinCorrNet
 from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
+from .backends.hf import HFState, projected_seed, solve_external, validate_seed
 from .method import DeePHF
 from .rks_method import RKSDeePHF
 from .df_spin import DFSpinDeePHF
@@ -49,8 +50,10 @@ def make_deephf(reference, model, *, projector_basis=None, device="cpu", respons
     )
 
 
-def build_reference(molecule, family, *, scf_args=None, verbose=0, density_fit=False):
-    """Build and converge one exact native reference in the accepted support tier."""
+def _new_reference(molecule, family, scf_args, verbose, density_fit, auxbasis):
+    """Prepare the common molecular Hamiltonian without starting SCF."""
+    if auxbasis is not None and not density_fit:
+        raise ValueError("auxbasis requires density_fit=True")
     if type(family) is not str or family.lower() not in REFERENCE_FAMILIES:
         raise ValueError("reference family must be one of rhf, uhf, rks, or uks")
     family = family.lower()
@@ -70,7 +73,7 @@ def build_reference(molecule, family, *, scf_args=None, verbose=0, density_fit=F
     if density_fit:
         if family not in {"rhf", "uhf"}:
             raise ValueError("the spin DF-HF workflow requires RHF or UHF")
-        reference = reference.density_fit()
+        reference = reference.density_fit(auxbasis=auxbasis)
     reference.verbose = verbose
     controls = {
         "conv_tol": 1.0e-13,
@@ -105,10 +108,56 @@ def build_reference(molecule, family, *, scf_args=None, verbose=0, density_fit=F
         reference.grids.cutoff = 1.0e-15
         reference.grids.build(with_non0tab=True, sort_grids=False)
         reference.small_rho_cutoff = 0.0
-    reference.kernel(dm0=None)
-    if not reference.converged:
-        raise RuntimeError(f"the native {family.upper()} reference did not converge")
     return reference
+
+
+def _solve(molecule, family, scf_backend, scf_device, scf_args, verbose, density_fit, auxbasis,
+           *, density_only=False, initial_reference=None):
+    controls = dict(scf_args or {})
+    native_controls = {} if scf_backend == "generativeqc" else controls
+    reference = _new_reference(molecule, family, native_controls, verbose, density_fit, auxbasis)
+    if initial_reference is not None:
+        validate_seed(initial_reference, reference, family.lower())
+    if scf_backend == "pyscf":
+        if scf_device not in (None, "cpu"):
+            raise ValueError("PySCF requires scf_device=cpu")
+        reference.kernel(dm0=projected_seed(initial_reference, molecule))
+        if not reference.converged:
+            raise RuntimeError(f"the native {family.upper()} reference did not converge")
+        if density_only:
+            return HFState(reference.e_tot, np.asarray(reference.make_rdm1()))
+        return reference
+    state = solve_external(reference, family.lower(), scf_backend,
+                           "cuda" if scf_device is None else scf_device, controls, initial_reference)
+    if density_only:
+        state.validate(molecule, family.lower() == "rhf", reference.get_ovlp())
+        return state
+    return state.response_reference(reference)
+
+
+def build_hf_state(molecule, family, *, scf_backend="pyscf", scf_device=None, density_fit=False,
+                   auxbasis=None, scf_args=None, initial_reference=None, verbose=0):
+    """Return HF total energy and AO density in the supplied molecule's basis.
+
+    Density is spin-summed for RHF and ordered (alpha, beta) for UHF.
+    The optional converged seed may come from another supported HF engine.
+    """
+    if not isinstance(family, str) or family.lower() not in ("rhf", "uhf"):
+        raise ValueError("an HF density requires the RHF or UHF family")
+    return _solve(molecule, family, scf_backend, scf_device, scf_args, verbose,
+                  density_fit, auxbasis, density_only=True, initial_reference=initial_reference)
+
+
+def build_reference(molecule, family, *, scf_args=None, verbose=0, density_fit=False,
+                    auxbasis=None, scf_backend="pyscf", scf_device=None, initial_reference=None):
+    """Return canonical PySCF response orbitals for the selected SCF engine's root."""
+    return _solve(molecule, family, scf_backend, scf_device, scf_args, verbose, density_fit, auxbasis,
+                  initial_reference=initial_reference)
+
+
+def _state_energies(base, correction):
+    return {"converged": np.asarray(True), "e_base": np.asarray(base),
+            "e_corr": np.asarray(correction), "e_tot": np.asarray(base + correction)}
 
 
 def evaluate_molecule(
@@ -125,17 +174,33 @@ def evaluate_molecule(
     verbose=0,
     energy_only=False,
     density_fit=False,
+    auxbasis=None,
+    scf_backend="pyscf",
+    scf_device=None,
+    initial_reference=None,
 ):
     """Evaluate one state, optionally omitting derivative and descriptor outputs."""
-    if density_fit and not isinstance(model, SpinCorrNet):
-        raise ValueError("density_fit in this workflow requires a SpinCorrNet checkpoint")
-    reference = build_reference(molecule, family, scf_args=scf_args, verbose=verbose, density_fit=density_fit)
-    if isinstance(model, SpinCorrNet):
-        if projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
-            raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
+    spin_model = isinstance(model, SpinCorrNet)
+    bare_energy = model is None and energy_only
+    if density_fit and not (spin_model or bare_energy):
+        raise ValueError("density_fit requires a SpinCorrNet checkpoint or a bare HF energy")
+    if spin_model and projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
+        raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
+    density_model = spin_model or (bare_energy and (density_fit or scf_backend != "pyscf"))
+    if energy_only and density_model and isinstance(family, str) and family.lower() in ("rhf", "uhf"):
+        state = build_hf_state(molecule, family, scf_backend=scf_backend, scf_device=scf_device,
+                               scf_args=scf_args, verbose=verbose, density_fit=density_fit,
+                               auxbasis=auxbasis, initial_reference=initial_reference)
+        corr = 0.0
+        if spin_model:
+            corr = model.to(device).eval().correction_from_density(molecule, state.density)
+        return _state_energies(state.energy, corr)
+    reference = build_reference(molecule, family, scf_backend=scf_backend, scf_device=scf_device,
+                                scf_args=scf_args, verbose=verbose, density_fit=density_fit,
+                                auxbasis=auxbasis, initial_reference=initial_reference)
+    if spin_model:
         correction = model.to(device).eval().correction_energy(reference)
-        result = {"converged": np.asarray(True), "e_base": np.asarray(reference.e_tot),
-                  "e_corr": np.asarray(correction), "e_tot": np.asarray(reference.e_tot + correction)}
+        result = _state_energies(reference.e_tot, correction)
         if not energy_only:
             method = make_deephf(reference, model, projector_basis=projector_basis, device=device,
                                  response_options=response_options, adjoint_options=adjoint_options)
@@ -190,6 +255,9 @@ def main(
     verbose=0,
     energy_only=False,
     density_fit=False,
+    auxbasis=None,
+    scf_backend="pyscf",
+    scf_device=None,
 ):
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
@@ -227,6 +295,9 @@ def main(
                     verbose=verbose,
                     energy_only=energy_only,
                     density_fit=density_fit,
+                    auxbasis=auxbasis,
+                    scf_backend=scf_backend,
+                    scf_device=scf_device,
                 )
             )
         if not frames:
@@ -241,4 +312,4 @@ def main(
     return outputs
 
 
-__all__ = ["build_reference", "evaluate_molecule", "main", "make_deephf"]
+__all__ = ["build_hf_state", "build_reference", "evaluate_molecule", "main", "make_deephf"]

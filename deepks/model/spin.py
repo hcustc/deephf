@@ -149,13 +149,23 @@ class SpinCorrNet(torch.nn.Module):
     def correction_energy(self, reference):
         """Return the single-state correction in Hartree, including elemental offsets."""
         descriptor, features = self.state_features(reference)
+        return self._correction(descriptor, features)
+
+    @torch.no_grad()
+    def correction_from_density(self, molecule, density):
+        """Evaluate the frozen network on a converged RHF or alpha/beta AO density."""
+        descriptor = AtomicDensityDescriptor(molecule, self.network._pbas)
+        features = descriptor.spin_features(density, molecule.spin)
+        return self._correction(descriptor, features)
+
+    def _correction(self, descriptor, features):
         positions = None
         if self.relative_cutoff_angstrom is not None:
-            xyz = reference.mol.atom_coords(unit="Angstrom")
+            xyz = descriptor.mol.atom_coords(unit="Angstrom")
             positions = torch.as_tensor(xyz[list(descriptor.descriptor_atom_indices)])
         correction = self(features.to(self.network.input_shift), positions).item()
         elements = [
-            int(reference.mol.atom_charge(i))
+            int(descriptor.mol.atom_charge(i))
             for i in descriptor.descriptor_atom_indices
         ]
         correction += self.network.get_elem_const(elements)
