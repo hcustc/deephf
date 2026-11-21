@@ -42,9 +42,6 @@ class _FockResponse(DFOrbitalResponse):
 @contextmanager
 def generativeqc_response(reference, device):
     """Own one native Fock plan throughout GMRES, with PySCF nuclear integrals."""
-    from generativeqc.fock import FockBuildSpec, FockPlan
-    from generativeqc_compiler.dft import NativeAO
-
     device = torch.device(device)
     mol = reference.mol
     aux = auxiliary_molecule(reference)
@@ -52,10 +49,17 @@ def generativeqc_response(reference, device):
         raise ValueError("native GenerativeQC response requires spherical all-electron molecular bases")
     if np.any(mol._atm[:, gto.NUC_MOD_OF] != gto.NUC_POINT):
         raise ValueError("native GenerativeQC response requires point nuclei")
-    if max(mol.bas_angular(i) for i in range(mol.nbas)) > 3 or max(
-        aux.bas_angular(i) for i in range(aux.nbas)
-    ) > 3:
-        raise ValueError("GenerativeQC FockPlan response accepts orbital and auxiliary shells through f")
+    orbital_l = max(mol.bas_angular(i) for i in range(mol.nbas))
+    auxiliary_l = max(aux.bas_angular(i) for i in range(aux.nbas))
+    if max(orbital_l, auxiliary_l) > 3:
+        raise ValueError(
+            f"GenerativeQC FockPlan supports shells through f (l=3), but this calculation "
+            f"has orbital l_max={orbital_l} and auxiliary l_max={auxiliary_l}. "
+            "Use backend='zvector' (--backend zvector) with the same SCF engine and bases."
+        )
+    from generativeqc.fock import FockBuildSpec, FockPlan
+    from generativeqc_compiler.dft import NativeAO
+
     atoms = list(zip(mol.atom_charges().tolist(), mol.atom_coords()))
     kwargs = dict(representation="spherical", charge=mol.charge, multiplicity=abs(mol.spin) + 1)
     spec = FockBuildSpec.hf(

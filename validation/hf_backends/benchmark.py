@@ -1,4 +1,4 @@
-"""Time complete spin-model energy predictions on one Slurm-allocated GPU.
+"""Time complete spin-model energy predictions on CPU or one allocated GPU.
 
 Run each backend in a fresh process. Each size starts from a fresh SCF guess
 even on repetitions. The first call may pay one-time CUDA initialization costs.
@@ -41,7 +41,7 @@ def main():
     fixture = Path(__file__).resolve().parents[2] / "tests/spin_energy/data/qm9_methanol"
     model = SpinCorrNet.load(fixture / "joint_B.pth")
     writer = csv.writer(sys.stdout)
-    writer.writerow(["engine", "n_water", "nao", "first_s", "repeat_median_s", "e_tot_hartree"])
+    writer.writerow(["engine", "cpu_threads", "n_water", "nao", "first_s", "repeat_median_s", "e_tot_hartree"])
     for count in args.waters:
         mol = water_cluster(count)
         timings = []
@@ -50,7 +50,7 @@ def main():
             result = evaluate_molecule(mol, model, family="rhf", density_fit=True,
                                        scf_backend=args.engine, energy_only=True)
             timings.append(perf_counter() - start)
-        writer.writerow([args.engine, count, mol.nao, timings[0], median(timings[1:]),
+        writer.writerow([args.engine, args.threads, count, mol.nao, timings[0], median(timings[1:]),
                          float(result["e_tot"])])
         sys.stdout.flush()
 

@@ -1,7 +1,9 @@
 """Replay the archived C6H12+ force using a transported UHF root and frozen models."""
 
 import argparse
+import csv
 from pathlib import Path
+import runpy
 
 import numpy as np
 from pyscf import gto, lib, scf
@@ -10,11 +12,32 @@ from deepks.deephf import HFState, build_hf_state, make_deephf
 from deepks.model import SpinCorrNet
 
 
+def apply_smoothed_control(models, archive):
+    """Replay the paper's frozen-B transform and read its matching PySCF force."""
+    tau = 0.001
+    with (archive / "forces.csv").open(newline="") as stream:
+        row, = (row for row in csv.DictReader(stream)
+                if (row["case"], row["model"], row["point"]) == ("stress", "B", "old_endpoint")
+                and float(row["tau"]) == tau)
+    # The user supplies the trusted paper archive. Use the same differentiable
+    # transform in both the energy-only and analytic-gradient calls.
+    features = runpy.run_path(str(archive / "smooth.py"))["features"]
+
+    def smooth_input(_model, args):
+        return (features(args[0], tau), *args[1:])
+
+    for model in models:
+        model.register_forward_pre_hook(smooth_input)
+    return float(row["force_direction"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="archive with z, xyz (Angstrom), d, e and force (eV/Angstrom)")
     parser.add_argument("weights", nargs="+", type=Path, help="joint B ensemble checkpoints")
     parser.add_argument("--engine", choices=["pyscf", "gpu4pyscf", "generativeqc"], default="generativeqc")
+    parser.add_argument("--smoothed-control", type=Path,
+                        help="trusted paper archive containing smooth.py and its forces.csv")
     args = parser.parse_args()
     with np.load(args.root) as data:
         mol = gto.M(atom=list(zip(data["z"], data["xyz"])), basis="def2-svp",
@@ -22,6 +45,8 @@ def main():
         seed = HFState(float(data["e"]), data["d"]).response_reference(scf.UHF(mol).density_fit())
         expected = float(data["force"][4, 0])
     models = [SpinCorrNet.load(path) for path in args.weights]
+    if args.smoothed_control is not None:
+        expected = apply_smoothed_control(models, args.smoothed_control)
     options = dict(family="uhf", density_fit=True, scf_backend=args.engine, initial_reference=seed)
     if args.engine == "generativeqc":
         options["scf_args"] = dict(conv_tol=1e-13, density_tolerance=1e-12, max_cycle=120)

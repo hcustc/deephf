@@ -110,12 +110,12 @@ def test_cli_writes_bare_energy_with_selected_engine(tmp_path, monkeypatch):
 
 
 def test_g_shells_fail_explicitly_only_for_native_adjoint():
-    require_engine("generativeqc", "cpu")
     mol = gto.M(atom="O 0 0 0; H .94 0 0; H -.23 .85 .13", basis="def2-svp", verbose=0)
-    ref = build_reference(mol, "rhf", density_fit=True)
-    from deepks.deephf.backends.generativeqc_response import generativeqc_response
-    with pytest.raises(ValueError, match="through f"), generativeqc_response(ref, "cpu"):
-        pytest.fail("unexpectedly prepared g-shell Fock response")
+    model = SpinCorrNet.load(ARCHIVE / "joint_B.pth")
+    with pytest.raises(ValueError, match=r"auxiliary l_max=4.*--backend zvector"):
+        evaluate_molecule(mol, model, family="rhf", density_fit=True, backend="generativeqc-zvector")
+    result = evaluate_molecule(mol, model, family="rhf", density_fit=True, backend="zvector")
+    assert np.isfinite(result["force"]).all()
 
 
 @pytest.mark.parametrize("engine,device", [("pyscf", "cpu"), *ENGINES])
