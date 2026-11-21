@@ -4,7 +4,7 @@ from contextlib import nullcontext
 from unittest.mock import Mock
 
 import numpy as np
-from pyscf import gto, scf
+from pyscf import df, gto, scf
 import pytest
 
 from deepks.deephf.backends.hf import HFState
@@ -16,7 +16,17 @@ from validation.hf_backends.fock_reuse import OneFrameTrial
 def root():
     mol = gto.M(atom="O 0 0 0; H .94 0 0; H -.22 .85 .10", basis="def2-svp",
                 spin=1, charge=1, verbose=0)
-    new_reference = lambda: scf.UHF(mol).density_fit(auxbasis="def2-svp-jkfit")
+
+    def new_reference(*, factor_file=None):
+        ref = scf.UHF(mol).density_fit(auxbasis="def2-svp-jkfit")
+        # The witness requires an in-memory array. PySCF's automatic storage
+        # choice depends on resident memory left by tests earlier in the suite.
+        if factor_file is None:
+            ref.with_df._cderi = df.incore.cholesky_eri(mol, auxbasis=ref.with_df.auxbasis)
+        else:
+            ref.with_df._cderi_to_save = str(factor_file)
+        return ref
+
     native = new_reference().set(conv_tol=1e-12, conv_tol_grad=1e-8).run()
     assert native.converged
     return HFState(native.e_tot, native.make_rdm1()), new_reference
@@ -78,6 +88,18 @@ def test_valid_reference_near_residual_limit_uses_fresh_fock(root, monkeypatch):
         monkeypatch.setattr(ref, "get_veff", fresh)
         method._validate_reference(ref)
         fresh.assert_called_once()
+        assert trial.hits == 0
+
+
+def test_disk_backed_factors_use_fresh_fock(root, tmp_path):
+    state, new_reference = root
+    trial = OneFrameTrial()
+    factor_file = tmp_path / "factors.h5"
+    with trial.enabled():
+        ref = state.response_reference(new_reference(factor_file=factor_file))
+        assert factor_file.is_file()
+        assert trial.witness is None
+        method._validate_reference(ref)
         assert trial.hits == 0
 
 
