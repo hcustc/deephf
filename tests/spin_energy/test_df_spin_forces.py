@@ -284,6 +284,13 @@ def test_one_shot_force_workflows_validate_the_fock_once(monkeypatch):
     assert len(checked) == 1
 
 
+def test_correction_with_offsets_accepts_scalar_energies():
+    mol = gto.M(atom=WATER, basis="sto-3g", verbose=0)
+    model = spin_model(True)
+    for energy in (0.5, np.float32(0.5), torch.tensor(0.5, requires_grad=True)):
+        assert model.correction_with_offsets(mol, energy) == pytest.approx(0.46)
+
+
 @pytest.mark.parametrize("charge", [0, 1], ids=["rhf", "uhf"])
 @pytest.mark.parametrize("backend", ["direct", "zvector"])
 def test_joint_spin_evaluation_reuses_features_and_forward(charge, backend, monkeypatch):

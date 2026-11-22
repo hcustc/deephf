@@ -404,7 +404,7 @@ def _evaluate_reference(
         energy, features, gradient = method._evaluate_on_validated_root(backend)
         correction = model.correction_with_offsets(reference.mol, energy)
         result = _state_energies(reference.e_tot, correction)
-        result.update(descriptor=features.numpy(), gradient=gradient, force=-gradient)
+        result.update(descriptor=as_numpy(features), gradient=gradient, force=-gradient)
         return result
     method = make_deephf(
         reference,

@@ -175,9 +175,11 @@ class SpinCorrNet(torch.nn.Module):
         return self.correction_with_offsets(descriptor.mol, energy)
 
     def correction_with_offsets(self, molecule, energy):
-        """Include the elemental baselines after a single-state network evaluation."""
+        """Add elemental baselines to a scalar network energy and return Hartree."""
         elements = [int(molecule.atom_charge(i)) for i in descriptor_atom_indices(molecule)]
-        correction = energy.item() + self.network.get_elem_const(elements)
+        if isinstance(energy, torch.Tensor):
+            energy = energy.item()
+        correction = float(energy) + self.network.get_elem_const(elements)
         if not math.isfinite(correction):
             raise ValueError("single-state energy correction must be finite")
         return float(correction)
