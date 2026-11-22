@@ -182,6 +182,11 @@ contractions to the GPU. To accelerate SCF Coulomb/exchange builds as well,
 wrap `df_reference.kernel()` in `with device_df_jk(df_reference, "cuda"):`,
 imported from `deepks.deephf`. PySCF computes the molecular integrals on the CPU.
 
+For single-state spin DF forces with GPU4PySCF SCF and the Z-vector backend,
+`gpu_derivatives="hf"` evaluates the HF gradient on the native converged GPU
+object. Set `--gpu-derivatives hf` on the CLI to select this path. The CPU
+canonical response reference and stationarity checks are retained.
+
 **Joint fitting.** Prepare each state once with
 `SpinTrainingState.from_reference(df_reference, model, energy_target, force_target)`.
 Supply total energies in Hartree and forces in Hartree/Bohr. Omitting

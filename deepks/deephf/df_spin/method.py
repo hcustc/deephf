@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from pyscf import scf
 
+from deepks.gpu import as_numpy
 from deepks.descriptor import AtomicDensityDescriptor, projected_density, validate_differentiability
 
 from ..backends.generativeqc_response import generativeqc_response
@@ -72,7 +73,7 @@ def _validate_spectrum(descriptor, features, reference):
 def _hf_gradient(reference):
     driver = reference.nuc_grad_method()
     driver.auxbasis_response = True
-    return np.asarray(driver.kernel())
+    return as_numpy(driver.kernel())
 
 
 @dataclass(frozen=True)
@@ -151,7 +152,7 @@ class DFSpinDeePHF:
         return gradient
 
     @torch.enable_grad()
-    def _evaluate_on_validated_root(self, backend):
+    def _evaluate_on_validated_root(self, backend, *, native_gpu=None):
         """Return the network energy before elemental offsets, raw features and gradient.
 
         Use the same features and forward pass for all three outputs. The direct
@@ -185,7 +186,8 @@ class DFSpinDeePHF:
         response = (generativeqc_response(ref, self.device) if backend == "generativeqc-zvector"
                     else nullcontext(DFOrbitalResponse(ref, self.device)))
         with response as orbital:
-            gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential, orbital)
+            hf = _hf_gradient(ref if native_gpu is None else native_gpu)
+            gradient = hf + explicit + self._orbital_gradient(potential, orbital)
         if not np.isfinite(gradient).all():
             raise ValueError("nonfinite DF-HF/model gradient")
         return energy.detach(), features.detach(), gradient
