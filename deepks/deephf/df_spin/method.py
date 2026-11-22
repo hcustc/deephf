@@ -7,11 +7,15 @@ import numpy as np
 import torch
 from pyscf import scf
 
-from deepks.descriptor import AtomicDensityDescriptor, projected_density, validate_differentiability
+from deepks.descriptor import (
+    AtomicDensityDescriptor, DescriptorDifferentiabilityError, projected_density,
+    validate_differentiability,
+)
+from deepks.gpu import as_numpy
 
 from ..backends.generativeqc_response import generativeqc_response
 from ..backends.hf import build_spin_reference as build_spin_reference
-from .integrals import DFFockDerivative, auxiliary_molecule
+from .integrals import DFFockDerivative, auxiliary_molecule, gpu_fock_derivative
 from .orbitals import DFOrbitalResponse
 
 
@@ -56,7 +60,7 @@ def _validate_local_model(model):
         raise ValueError("relative-spin checkpoints support energy-only inference")
 
 
-def _validate_spectrum(descriptor, features, reference):
+def _validate_spectrum(descriptor, features, reference, *, smooth):
     # A repeated, nonstructural eigenvalue can give different one-sided
     # slopes after sorting. Do not publish an arbitrary eigensolver gradient.
     n_occ = int(np.count_nonzero(reference.mo_occ))
@@ -64,6 +68,7 @@ def _validate_spectrum(descriptor, features, reference):
         features[:, : descriptor.n_features].detach().numpy(),
         descriptor.shell_sizes,
         n_occ,
+        symmetric_function=smooth,
         gap_atol=1e-13,
         gap_rtol=1e-12,
     )
@@ -72,7 +77,7 @@ def _validate_spectrum(descriptor, features, reference):
 def _hf_gradient(reference):
     driver = reference.nuc_grad_method()
     driver.auxbasis_response = True
-    return np.asarray(driver.kernel())
+    return as_numpy(driver.kernel())
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,7 @@ class SpinForceFrame:
     jacobian: torch.Tensor
     hf_force: torch.Tensor
     projector_basis: list
+    smooth_only: bool = False
 
     def forces(self, model, *, create_graph=False):
         """Contract the relaxed Jacobian with optional weight gradients for fitting."""
@@ -99,9 +105,11 @@ class SpinForceFrame:
     def _energy_and_forces(self, model, *, create_graph=False):
         """Use the network energy and its slope from the same forward pass."""
         _validate_local_model(model)
-        if self.projector_basis != model.network._pbas:
+        if self.smooth_only and not model.spectrum_tau:
+            raise ValueError("a smooth-spectrum force frame requires a smooth model")
+        if self.projector_basis != model.projector_basis:
             raise ValueError("projector basis differs from the force frame")
-        x = self.features.to(model.network.input_shift).detach().requires_grad_()
+        x = self.features.to(model.input_reference).detach().requires_grad_()
         energy = model(x).sum()
         (slope,) = torch.autograd.grad(energy, x, create_graph=create_graph)
         result = self.hf_force.to(x) - torch.einsum("rxaf,af->rx", self.jacobian.to(x), slope)
@@ -133,7 +141,7 @@ class DFSpinDeePHF:
 
     def _descriptors(self):
         ref = self.reference
-        return AtomicDensityDescriptor(ref.mol, self.model.network._pbas, device="cpu")
+        return AtomicDensityDescriptor(ref.mol, self.model.projector_basis, device="cpu")
 
     def descriptor(self):
         """Return the raw single-state spin features in descriptor-atom order."""
@@ -151,7 +159,7 @@ class DFSpinDeePHF:
         return gradient
 
     @torch.enable_grad()
-    def _evaluate_on_validated_root(self, backend):
+    def _evaluate_on_validated_root(self, backend, *, native_gpu=None, gpu_df=False):
         """Return the network energy before elemental offsets, raw features and gradient.
 
         Use the same features and forward pass for all three outputs. The direct
@@ -169,8 +177,8 @@ class DFSpinDeePHF:
         density = torch.as_tensor(np.asarray(ref.make_rdm1())).requires_grad_()
         overlaps = tuple(o.requires_grad_() for o in descriptor.overlap_shells)
         features = descriptor.spin_features(density, ref.mol.spin)
-        _validate_spectrum(descriptor, features, ref)
-        energy = self.model(features.to(self.model.network.input_shift)).sum()
+        _validate_spectrum(descriptor, features, ref, smooth=bool(self.model.spectrum_tau))
+        energy = self.model(features.to(self.model.input_reference)).sum()
         potential, *projector_slopes = torch.autograd.grad(energy, (density, *overlaps))
         # Cross-overlap ip1 differentiates the electron coordinate. AO and
         # projector centre displacements therefore have opposite signs.
@@ -185,12 +193,15 @@ class DFSpinDeePHF:
         response = (generativeqc_response(ref, self.device) if backend == "generativeqc-zvector"
                     else nullcontext(DFOrbitalResponse(ref, self.device)))
         with response as orbital:
-            gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential, orbital)
+            hf = _hf_gradient(ref if native_gpu is None else native_gpu)
+            gradient = hf + explicit + self._orbital_gradient(
+                potential, orbital, native_gpu=native_gpu if gpu_df else None
+            )
         if not np.isfinite(gradient).all():
             raise ValueError("nonfinite DF-HF/model gradient")
         return energy.detach(), features.detach(), gradient
 
-    def _orbital_gradient(self, potential, orbital):
+    def _orbital_gradient(self, potential, orbital, *, native_gpu=None):
         """Contract the relaxed density motion, including its AO-metric gauge."""
         ref = self.reference
         potentials = potential.reshape(-1, ref.mol.nao, ref.mol.nao).to(self.device)
@@ -216,7 +227,11 @@ class DFSpinDeePHF:
             gauge = orbital.weight * o @ (o.T @ p @ o - h_occ) @ o.T
             metric_weights.append((weighted + weighted.T) * 0.5 - gauge)
         metric_term = torch.einsum("xij,ij->x", orbital.overlap_motion(), sum(metric_weights))
-        fock_term = DFFockDerivative(ref).contract(torch.stack(pairs).cpu().numpy())
+        probe = torch.stack(pairs).cpu().numpy()
+        if native_gpu is None:
+            fock_term = DFFockDerivative(ref).contract(probe)
+        else:
+            fock_term = gpu_fock_derivative(ref, native_gpu, probe)
         return metric_term.reshape(-1, 3).cpu().numpy() - fock_term
 
     def forces(self, *, backend="zvector"):
@@ -235,7 +250,16 @@ class DFSpinDeePHF:
         descriptor = self._descriptors()
         density = torch.as_tensor(np.asarray(ref.make_rdm1()))
         features = descriptor.spin_features(density, ref.mol.spin)
-        _validate_spectrum(descriptor, features, ref)
+        # A raw Jacobian at a repeated eigenvalue is basis-dependent. Its
+        # contraction is well-defined when the model gives equal slot slopes.
+        smooth_only = False
+        try:
+            _validate_spectrum(descriptor, features, ref, smooth=False)
+        except DescriptorDifferentiabilityError:
+            if not self.model.spectrum_tau:
+                raise
+            _validate_spectrum(descriptor, features, ref, smooth=True)
+            smooth_only = True
         dp = DFOrbitalResponse(ref, self.device).density_derivatives()
 
         def motions(p, change):
@@ -267,4 +291,5 @@ class DFSpinDeePHF:
             jacobian.reshape(ref.mol.natm, 3, *features.shape),
             hf_force,
             descriptor.projector_basis,
+            smooth_only=smooth_only,
         )

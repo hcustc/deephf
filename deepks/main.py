@@ -199,14 +199,19 @@ def deephf_cli(args=None):
                         help="XYZ files or molecular data directories")
     parser.add_argument("-r", "--reference", choices=("rhf", "uhf", "rks", "uks"),
                         help="native reference family")
-    parser.add_argument("-m", "--model-file",
-                        help="CorrNet or SpinCorrNet checkpoint, or NONE for a zero correction")
+    weights = parser.add_mutually_exclusive_group()
+    weights.add_argument("-m", "--model-file",
+                         help="CorrNet or SpinCorrNet checkpoint, or NONE for a zero correction")
+    weights.add_argument("--ensemble-files", nargs="+", dest="model_file",
+                         help="equally weighted SpinCorrNet checkpoints on the same HF root")
     parser.add_argument("--density-fit", action="store_true",
                         help="use DF J and K for a single-state spin checkpoint")
     parser.add_argument("--energy-only", action="store_true",
                         help="evaluate single-state energies without gradients")
     parser.add_argument("-b", "--backend", choices=("direct", "zvector", "generativeqc-zvector"),
                         help="analytic-gradient backend")
+    parser.add_argument("--gpu-derivatives", choices=("hf", "hf+df"),
+                        help="reuse the GPU4PySCF DF root for HF or HF and Fock derivatives")
     parser.add_argument("--scf-backend", choices=("pyscf", "gpu4pyscf", "generativeqc"),
                         help="engine used to converge the HF state")
     parser.add_argument("--scf-device", choices=("cpu", "cuda"), help="SCF engine device")

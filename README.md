@@ -168,10 +168,38 @@ orbital adjoint using GMRES. The direct Jacobian used for force training stores 
 dense orbital Hessian with memory proportional to the square of the total
 number of occupied–virtual orbital pairs (summed over spin channels). Both backends include auxiliary-centre and
 Coulomb-metric motion. The implementation assumes an isolated stationary
-electronic branch. It rejects unresolved nonstructural eigenvalue crossings
+electronic branch. The hard-spectrum model rejects unresolved nonstructural eigenvalue crossings
 in the ordered total-density descriptor. Root stability requires a separate
 orbital-Hessian check. Checkpoints with a
 relative-spin cutoff currently support energy evaluation only.
+
+For a smooth total-density spectrum, train with
+`SpinCorrNet(..., spectrum_tau=0.001)`. Each s, p or d projector shell uses
+the same permutation average in energy training, joint force fitting, and both
+gradient backends. Nominal spin and the signed shell traces keep their original
+definitions. Smooth checkpoints store the width and spin conventions. Legacy
+checkpoints load with hard ordering by default. For an archived fit known to
+have used external smoothing, load with
+`SpinCorrNet.load(path, legacy_spectrum_tau=0.001)` and save to a new file.
+The raw descriptor returned by the workflow stays suitable for model input.
+
+For the mean energy and force of fixed members on the same HF root:
+
+```python
+from deepks.model import SpinCorrNet, SpinEnsemble
+from deepks.deephf import SpinDeePHFCalculator
+
+ensemble = SpinEnsemble([SpinCorrNet.load(path) for path in paths])
+atoms.calc = SpinDeePHFCalculator(mol, ensemble, family="uhf", device="cuda")
+forces_eV_per_angstrom = atoms.get_forces()
+```
+
+Members share the projector and feature mapping. Their elemental offsets are
+averaged with their network energies. The Z-vector backend differentiates the
+mean correction and solves one adjoint per state. The ASE template supplies the
+basis, charge and spin. Each accepted geometry seeds the next SCF. For a batch
+of files, use `--ensemble-files seed1.pth seed2.pth --backend zvector` in
+place of a single checkpoint.
 
 The CLI uses the same gradient through
 `deepks deephf --density-fit --reference uhf --model-file B.pth --basis def2-svp --backend zvector --systems cation.xyz`.
@@ -181,6 +209,15 @@ configuration. The default device is CPU. With a CUDA-enabled PyTorch build,
 contractions to the GPU. To accelerate SCF Coulomb/exchange builds as well,
 wrap `df_reference.kernel()` in `with device_df_jk(df_reference, "cuda"):`,
 imported from `deepks.deephf`. PySCF computes the molecular integrals on the CPU.
+
+For single-state spin DF forces with GPU4PySCF SCF and the Z-vector backend,
+`gpu_derivatives="hf"` evaluates the HF gradient on the native converged GPU
+object. `gpu_derivatives="hf+df"` also evaluates the mixed DF Fock derivative
+using GPU4PySCF's blocked Coulomb/exchange gradient contractions. The CLI flag
+is `--gpu-derivatives hf+df`. These opt-in paths retain the CPU canonical
+response reference and its stationarity checks. The mixed contraction uses the
+polarization identity for the quadratic two-electron energy gradient, including
+auxiliary-centre and metric response. GPU4PySCF 1.8.1 was used for validation.
 
 **Joint fitting.** Prepare each state once with
 `SpinTrainingState.from_reference(df_reference, model, energy_target, force_target)`.
@@ -468,7 +505,7 @@ uv build
 git diff --check
 ```
 
-The current accepted repository state completes 838 tests and builds both the source distribution and wheel.
+The current accepted repository state passes the complete test suite and builds both the source distribution and wheel.
 
 ## References
 
