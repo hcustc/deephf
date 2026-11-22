@@ -312,8 +312,9 @@ class SpinEnsemble(SpinEnergyModel):
                     or member.relative_cutoff_angstrom != first.relative_cutoff_angstrom
                     or member.mask_relative_spin != first.mask_relative_spin):
                 raise ValueError("ensemble members must share the projector and feature mapping")
-            if member.input_reference.dtype != first.input_reference.dtype:
-                raise ValueError("ensemble members must use the same network precision")
+            if (member.input_reference.dtype != first.input_reference.dtype
+                    or member.input_reference.device != first.input_reference.device):
+                raise ValueError("ensemble members must use the same network precision and device")
         self.members = torch.nn.ModuleList(members)
 
     @property

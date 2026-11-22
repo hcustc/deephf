@@ -258,7 +258,7 @@ def solve_external(reference, family, engine, device, controls, seed, *, dm0=Non
             gpu.conv_tol_grad = 5e-8
         else:
             gpu.conv_tol_grad = reference.conv_tol_grad
-        if (on_gpu_scf is not None and restricted and seed is None and dm0 is None
+        if (restricted and seed is None and dm0 is None
                 and reference.init_guess == "minao"):
             # GPU4PySCF 1.8.1 can construct an invalid RHF MINAO guess.
             dm0 = reference.get_init_guess(key="minao")

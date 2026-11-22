@@ -19,6 +19,11 @@ def test_mixed_spectra_rejected():
         SpinEnsemble([model(4), model(4, 0)])
 
 
+def test_mixed_device_rejected():
+    with pytest.raises(ValueError, match="precision and device"):
+        SpinEnsemble([model(4), model(4).to("meta")])
+
+
 @pytest.mark.parametrize("charge", [0, 1])
 def test_shared_adjoint_and_cartesian_derivative(charge):
     ref = reference(charge)

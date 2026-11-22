@@ -505,7 +505,7 @@ uv build
 git diff --check
 ```
 
-The current accepted repository state completes 838 tests and builds both the source distribution and wheel.
+The current accepted repository state passes the complete test suite and builds both the source distribution and wheel.
 
 ## References
 
