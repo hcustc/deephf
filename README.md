@@ -168,10 +168,20 @@ orbital adjoint using GMRES. The direct Jacobian used for force training stores 
 dense orbital Hessian with memory proportional to the square of the total
 number of occupied–virtual orbital pairs (summed over spin channels). Both backends include auxiliary-centre and
 Coulomb-metric motion. The implementation assumes an isolated stationary
-electronic branch. It rejects unresolved nonstructural eigenvalue crossings
+electronic branch. The hard-spectrum model rejects unresolved nonstructural eigenvalue crossings
 in the ordered total-density descriptor. Root stability requires a separate
 orbital-Hessian check. Checkpoints with a
 relative-spin cutoff currently support energy evaluation only.
+
+For a smooth total-density spectrum, train with
+`SpinCorrNet(..., spectrum_tau=0.001)`. Each s, p or d projector shell uses
+the same permutation average in energy training, joint force fitting, and both
+gradient backends. Nominal spin and the signed shell traces keep their original
+definitions. Smooth checkpoints store the width and spin conventions. Legacy
+checkpoints load with hard ordering by default. For an archived fit known to
+have used external smoothing, load with
+`SpinCorrNet.load(path, legacy_spectrum_tau=0.001)` and save to a new file.
+The raw descriptor returned by the workflow stays suitable for model input.
 
 The CLI uses the same gradient through
 `deepks deephf --density-fit --reference uhf --model-file B.pth --basis def2-svp --backend zvector --systems cation.xyz`.
