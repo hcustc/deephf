@@ -207,8 +207,8 @@ def deephf_cli(args=None):
                         help="evaluate single-state energies without gradients")
     parser.add_argument("-b", "--backend", choices=("direct", "zvector", "generativeqc-zvector"),
                         help="analytic-gradient backend")
-    parser.add_argument("--gpu-derivatives", choices=("hf",),
-                        help="reuse the GPU4PySCF DF root for its HF gradient")
+    parser.add_argument("--gpu-derivatives", choices=("hf", "hf+df"),
+                        help="reuse the GPU4PySCF DF root for HF or HF and Fock derivatives")
     parser.add_argument("--scf-backend", choices=("pyscf", "gpu4pyscf", "generativeqc"),
                         help="engine used to converge the HF state")
     parser.add_argument("--scf-device", choices=("cpu", "cuda"), help="SCF engine device")

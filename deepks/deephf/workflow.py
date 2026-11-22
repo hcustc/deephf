@@ -165,11 +165,11 @@ def _gpu_force_sources(mode, model, backend, scf_backend, density_fit, energy_on
     """Keep the native SCF object only between building and evaluating this frame."""
     if mode is None:
         return None
-    if (mode != "hf" or not isinstance(model, SpinCorrNet)
+    if (mode not in ("hf", "hf+df") or not isinstance(model, SpinCorrNet)
             or backend != "zvector" or scf_backend != "gpu4pyscf"
             or not density_fit or energy_only):
         raise ValueError("gpu_derivatives requires spin DF forces, GPU4PySCF SCF, "
-                         "zvector and mode 'hf'")
+                         "zvector and mode 'hf' or 'hf+df'")
     return {}
 
 
@@ -419,7 +419,7 @@ def _evaluate_reference(
             response_options=response_options, adjoint_options=adjoint_options,
         )
         energy, features, gradient = method._evaluate_on_validated_root(
-            backend, native_gpu=native_gpu,
+            backend, native_gpu=native_gpu, gpu_df=gpu_derivatives == "hf+df",
         )
         correction = model.correction_with_offsets(reference.mol, energy)
         result = _state_energies(reference.e_tot, correction)
