@@ -183,6 +183,24 @@ have used external smoothing, load with
 `SpinCorrNet.load(path, legacy_spectrum_tau=0.001)` and save to a new file.
 The raw descriptor returned by the workflow stays suitable for model input.
 
+For the mean energy and force of fixed members on the same HF root:
+
+```python
+from deepks.model import SpinCorrNet, SpinEnsemble
+from deepks.deephf import SpinDeePHFCalculator
+
+ensemble = SpinEnsemble([SpinCorrNet.load(path) for path in paths])
+atoms.calc = SpinDeePHFCalculator(mol, ensemble, family="uhf", device="cuda")
+forces_eV_per_angstrom = atoms.get_forces()
+```
+
+Members share the projector and feature mapping. Their elemental offsets are
+averaged with their network energies. The Z-vector backend differentiates the
+mean correction and solves one adjoint per state. The ASE template supplies the
+basis, charge and spin. Each accepted geometry seeds the next SCF. For a batch
+of files, use `--ensemble-files seed1.pth seed2.pth --backend zvector` in
+place of a single checkpoint.
+
 The CLI uses the same gradient through
 `deepks deephf --density-fit --reference uhf --model-file B.pth --basis def2-svp --backend zvector --systems cation.xyz`.
 Set the molecular charge and spin consistently in the input system or YAML

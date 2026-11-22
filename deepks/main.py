@@ -199,8 +199,11 @@ def deephf_cli(args=None):
                         help="XYZ files or molecular data directories")
     parser.add_argument("-r", "--reference", choices=("rhf", "uhf", "rks", "uks"),
                         help="native reference family")
-    parser.add_argument("-m", "--model-file",
-                        help="CorrNet or SpinCorrNet checkpoint, or NONE for a zero correction")
+    weights = parser.add_mutually_exclusive_group()
+    weights.add_argument("-m", "--model-file",
+                         help="CorrNet or SpinCorrNet checkpoint, or NONE for a zero correction")
+    weights.add_argument("--ensemble-files", nargs="+", dest="model_file",
+                         help="equally weighted SpinCorrNet checkpoints on the same HF root")
     parser.add_argument("--density-fit", action="store_true",
                         help="use DF J and K for a single-state spin checkpoint")
     parser.add_argument("--energy-only", action="store_true",

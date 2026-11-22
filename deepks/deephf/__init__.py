@@ -8,7 +8,7 @@ from .adjoint import (
     scalar_operator_fingerprint,
     solve_scalar_adjoint,
 )
-from .ase import DeePHFCalculator
+from .ase import DeePHFCalculator, SpinDeePHFCalculator
 
 from .capabilities import (
     DeePHFCapabilityError,
@@ -120,6 +120,7 @@ __all__ = [
     "spin_energy_force_loss",
     "device_df_jk",
     "DeePHFCalculator",
+    "SpinDeePHFCalculator",
     "DeePHFCapabilityError",
     "GPUDeePHF",
     "GPUDeePHFFiniteDifferenceScanner",

@@ -18,7 +18,7 @@ from deepks.gpu import (
     require_cuda_device,
 )
 from deepks.model.model import CorrNet
-from deepks.model.spin import SpinCorrNet
+from deepks.model.spin import SpinCorrNet, SpinEnergyModel, SpinEnsemble
 from deepks.utils import get_sys_name, load_basis, load_sys_paths
 
 from .backends.hf import HFState, build_hf_state, build_spin_reference, projected_seed, validate_seed
@@ -122,7 +122,7 @@ def _configure_gpu_dft(reference, molecule, dft_args) -> dict:
 
 
 def _check_spin_projector(model, projector_basis):
-    if projector_basis is not None and load_basis(projector_basis) != model.network._pbas:
+    if projector_basis is not None and load_basis(projector_basis) != model.projector_basis:
         raise ValueError("projector basis differs from the SpinCorrNet checkpoint")
 
 
@@ -136,7 +136,7 @@ def make_deephf(
     adjoint_options=None,
 ):
     """Construct the exact public DeePHF method matching a native reference."""
-    if isinstance(model, SpinCorrNet):
+    if isinstance(model, SpinEnergyModel):
         _check_spin_projector(model, projector_basis)
         if response_options or adjoint_options:
             raise ValueError("custom response options are unsupported for spin gradients")
@@ -165,7 +165,7 @@ def _reference_builder(
     model, density_fit, energy_only, *, scf_backend, scf_device, auxbasis, density_only=False,
 ):
     """Select a solver before SCF, keeping the conventional GPU workflow as its default."""
-    spin_model = isinstance(model, SpinCorrNet)
+    spin_model = isinstance(model, SpinEnergyModel)
     bare_energy = model is None and energy_only
     if spin_model and not energy_only and not density_fit:
         raise ValueError("spin forces require density_fit=True (--density-fit)")
@@ -336,7 +336,7 @@ def evaluate_molecule(
     initial_reference=None,
 ):
     """Evaluate one state and optionally omit its descriptor and derivatives."""
-    if isinstance(model, SpinCorrNet):
+    if isinstance(model, SpinEnergyModel):
         _check_spin_projector(model, projector_basis)
     build = _reference_builder(
         model, density_fit, energy_only, scf_backend=scf_backend, scf_device=scf_device,
@@ -391,7 +391,7 @@ def _evaluate_reference(
     """Evaluate one already converged native reference without rebuilding it."""
     if energy_only and model is None and not is_gpu_reference(reference):
         return _state_energies(reference.e_tot, 0.0)
-    if isinstance(model, SpinCorrNet):
+    if isinstance(model, SpinEnergyModel):
         model.eval()
         if energy_only:
             _check_spin_projector(model, projector_basis)
@@ -506,8 +506,8 @@ class _ReferenceSequence:
         self._previous_fingerprint = None
         self.records = []
 
-    def build(self, molecule):
-        """Build one candidate and advance the root anchor only after acceptance."""
+    def build(self, molecule, *, evaluate=None):
+        """Advance the root anchor only after continuity checks and optional evaluation."""
         system_fingerprint = _molecule_static_fingerprint(molecule)
         if (
             self._system_fingerprint is not None
@@ -580,6 +580,7 @@ class _ReferenceSequence:
             raise RootContinuityError(
                 f"the accepted {self.family.upper()} density is invalid"
             )
+        result = reference if evaluate is None else evaluate(reference)
         self._previous_reference = reference
         self._system_fingerprint = system_fingerprint
         self._previous_density = density.copy()
@@ -587,7 +588,7 @@ class _ReferenceSequence:
         self._previous_occupied = tuple(value.copy() for value in candidate_occupied)
         self._previous_fingerprint = state_fingerprint
         self.records.append(record)
-        return reference
+        return result
 
 
 def _model_target_provenance(model):
@@ -688,6 +689,8 @@ def main(
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
         model = None
+    elif isinstance(model_file, (tuple, list)):
+        model = SpinEnsemble(SpinCorrNet.load(path) for path in model_file)
     else:
         checkpoint = torch.load(model_file, map_location="cpu", weights_only=True)
         if isinstance(checkpoint, Mapping) and checkpoint.get("format") in SpinCorrNet.CHECKPOINT_FORMATS:

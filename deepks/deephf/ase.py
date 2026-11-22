@@ -13,7 +13,49 @@ from ase.calculators.calculator import (
 from .gpu_method import GPUDeePHF
 
 
-class DeePHFCalculator(Calculator):
+class _MolecularCalculator(Calculator):
+    implemented_properties = ["energy", "forces"]
+
+    def calculate(
+        self,
+        atoms=None,
+        properties=("energy", "forces"),
+        system_changes=all_changes,
+    ):
+        super().calculate(atoms, properties, system_changes)
+        if atoms is None:
+            raise CalculationFailed("DeePHF calculation requires ASE atoms")
+        if bool(np.any(atoms.get_pbc())):
+            raise CalculationFailed("molecular DeePHF does not support periodic ASE atoms")
+        numbers = np.asarray(atoms.get_atomic_numbers(), dtype=np.int64)
+        if not np.array_equal(numbers, self.atomic_numbers):
+            raise CalculationFailed(
+                "the ASE atomic numbers changed within one DeePHF trajectory"
+            )
+        molecule = self.template_molecule.set_geom_(
+            atoms.get_positions(),
+            unit="Angstrom",
+            inplace=False,
+        )
+        try:
+            energy_hartree, gradient_hartree_per_bohr = self.scanner(molecule)
+        except Exception as error:
+            raise CalculationFailed(f"DeePHF frame failed: {error}") from error
+        energy = float(energy_hartree) * units.Hartree
+        forces = (
+            -np.asarray(gradient_hartree_per_bohr, dtype=np.float64)
+            * units.Hartree
+            / units.Bohr
+        )
+        if not np.isfinite(energy) or not np.isfinite(forces).all():
+            raise CalculationFailed("DeePHF returned nonfinite ASE properties")
+        self.results = {
+            "energy": energy,
+            "forces": forces,
+        }
+
+
+class DeePHFCalculator(_MolecularCalculator):
     """Expose one continuous GPU DeePHF electronic root to ASE."""
 
     implemented_properties = ["energy", "forces"]
@@ -55,43 +97,41 @@ class DeePHFCalculator(Calculator):
             )
         self.force_mode = force_mode
 
-    def calculate(
-        self,
-        atoms=None,
-        properties=("energy", "forces"),
-        system_changes=all_changes,
+
+
+class SpinDeePHFCalculator(_MolecularCalculator):
+    """Evaluate one molecular RHF/UHF state along an ASE trajectory using analytic forces.
+
+    The template molecule supplies charge, spin, basis and atom order. The
+    previous accepted root seeds each displacement. Energies and forces are
+    evaluated together, including when a SpinEnsemble supplies the correction.
+    """
+
+    def __init__(
+        self, molecule, model, *, family, backend="zvector", device="cpu",
+        scf_backend="pyscf", scf_device=None, auxbasis=None, scf_args=None,
+        root_overlap_tolerance=0.5, **kwargs,
     ):
-        super().calculate(atoms, properties, system_changes)
-        if atoms is None:
-            raise CalculationFailed("DeePHF calculation requires ASE atoms")
-        if bool(np.any(atoms.get_pbc())):
-            raise CalculationFailed("molecular DeePHF does not support periodic ASE atoms")
-        numbers = np.asarray(atoms.get_atomic_numbers(), dtype=np.int64)
-        if not np.array_equal(numbers, self.atomic_numbers):
-            raise CalculationFailed(
-                "the ASE atomic numbers changed within one DeePHF trajectory"
-            )
-        molecule = self.template_molecule.set_geom_(
-            atoms.get_positions(),
-            unit="Angstrom",
-            inplace=False,
+        from functools import partial
+        from deepks.model.spin import SpinEnergyModel
+        from .workflow import _ReferenceSequence, _evaluate_reference, _reference_builder
+
+        super().__init__(**kwargs)
+        if not isinstance(model, SpinEnergyModel) or family not in {"rhf", "uhf"}:
+            raise ValueError("spin ASE calculations require a spin model and RHF or UHF")
+        self.template_molecule = molecule.copy()
+        self.atomic_numbers = np.asarray(molecule.atom_charges(), dtype=np.int64)
+        build = _reference_builder(model, True, False, scf_backend=scf_backend,
+                                   scf_device=scf_device, auxbasis=auxbasis)
+        self.sequence = _ReferenceSequence(
+            family, build=build, scf_args=scf_args, seed_with_reference=True,
+            root_overlap_tolerance=root_overlap_tolerance,
         )
-        try:
-            energy_hartree, gradient_hartree_per_bohr = self.scanner(molecule)
-        except Exception as error:
-            raise CalculationFailed(f"DeePHF frame failed: {error}") from error
-        energy = float(energy_hartree) * units.Hartree
-        forces = (
-            -np.asarray(gradient_hartree_per_bohr, dtype=np.float64)
-            * units.Hartree
-            / units.Bohr
-        )
-        if not np.isfinite(energy) or not np.isfinite(forces).all():
-            raise CalculationFailed("DeePHF returned nonfinite ASE properties")
-        self.results = {
-            "energy": energy,
-            "forces": forces,
-        }
+        self._evaluate = partial(_evaluate_reference, model=model, backend=backend, device=device)
+
+    def scanner(self, molecule):
+        result = self.sequence.build(molecule, evaluate=self._evaluate)
+        return result["e_tot"], result["gradient"]
 
 
-__all__ = ["DeePHFCalculator"]
+__all__ = ["DeePHFCalculator", "SpinDeePHFCalculator"]

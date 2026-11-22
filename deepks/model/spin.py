@@ -35,7 +35,59 @@ def _smooth_shell(values, tau):
     return (scores.softmax(-1).unsqueeze(-1) * candidates).sum(-2)
 
 
-class SpinCorrNet(torch.nn.Module):
+class SpinEnergyModel(torch.nn.Module):
+    """Shared reference, descriptor and elemental-energy conventions for spin inference."""
+
+    def state_features(self, reference):
+        """Build this checkpoint's projector and features for a converged collinear HF state."""
+        native = reference.undo_df() if hasattr(reference, "undo_df") else reference
+        if type(native) not in (scf.hf.RHF, scf.uhf.UHF):
+            raise TypeError("SpinCorrNet expects a native RHF or UHF reference")
+        if not reference.converged:
+            raise ValueError("the single-state reference must be converged")
+        descriptor = AtomicDensityDescriptor(reference.mol, self.projector_basis, device="cpu")
+        ao_density = reference.make_rdm1()
+        features = descriptor.spin_features(ao_density, reference.mol.spin)
+        return descriptor, features
+
+    @torch.no_grad()
+    def correction_energy(self, reference):
+        """Return the single-state correction in Hartree, including elemental offsets."""
+        descriptor, features = self.state_features(reference)
+        return self._correction(descriptor, features)
+
+    @torch.no_grad()
+    def correction_from_density(self, molecule, density):
+        """Evaluate the frozen network on a converged RHF or alpha/beta AO density."""
+        descriptor = AtomicDensityDescriptor(molecule, self.projector_basis, device="cpu")
+        features = descriptor.spin_features(density, molecule.spin)
+        return self._correction(descriptor, features)
+
+    def _correction(self, descriptor, features):
+        positions = None
+        if self.relative_cutoff_angstrom is not None:
+            xyz = descriptor.mol.atom_coords(unit="Angstrom")
+            positions = torch.as_tensor(xyz[list(descriptor.descriptor_atom_indices)])
+        energy = self(features.to(self.input_reference), positions)
+        return self.correction_with_offsets(descriptor.mol, energy)
+
+    def correction_with_offsets(self, molecule, energy):
+        """Add elemental baselines to a scalar network energy and return Hartree."""
+        elements = [int(molecule.atom_charge(i)) for i in descriptor_atom_indices(molecule)]
+        if isinstance(energy, torch.Tensor):
+            energy = energy.item()
+        correction = float(energy) + self.element_offset(elements)
+        if not math.isfinite(correction):
+            raise ValueError("single-state energy correction must be finite")
+        return float(correction)
+
+    def total_energy(self, reference):
+        """Compose the HF and learned energies for this single electronic state."""
+        correction = self.correction_energy(reference)
+        return float(reference.e_tot) + correction
+
+
+class SpinCorrNet(SpinEnergyModel):
     """An atomic CorrNet averaged over the two equivalent spin labelings.
 
     Inputs end in [total-density eigenvalues, |Nα-Nβ|, shell spin traces].
@@ -183,54 +235,6 @@ class SpinCorrNet(torch.nn.Module):
             self.prepare_features(features, positions, atom_mask), atom_mask
         )
 
-    def state_features(self, reference):
-        """Build this checkpoint's projector and features for a converged collinear HF state."""
-        native = reference.undo_df() if hasattr(reference, "undo_df") else reference
-        if type(native) not in (scf.hf.RHF, scf.uhf.UHF):
-            raise TypeError("SpinCorrNet expects a native RHF or UHF reference")
-        if not reference.converged:
-            raise ValueError("the single-state reference must be converged")
-        descriptor = AtomicDensityDescriptor(reference.mol, self.projector_basis, device="cpu")
-        ao_density = reference.make_rdm1()
-        features = descriptor.spin_features(ao_density, reference.mol.spin)
-        return descriptor, features
-
-    @torch.no_grad()
-    def correction_energy(self, reference):
-        """Return the single-state correction in Hartree, including elemental offsets."""
-        descriptor, features = self.state_features(reference)
-        return self._correction(descriptor, features)
-
-    @torch.no_grad()
-    def correction_from_density(self, molecule, density):
-        """Evaluate the frozen network on a converged RHF or alpha/beta AO density."""
-        descriptor = AtomicDensityDescriptor(molecule, self.projector_basis, device="cpu")
-        features = descriptor.spin_features(density, molecule.spin)
-        return self._correction(descriptor, features)
-
-    def _correction(self, descriptor, features):
-        positions = None
-        if self.relative_cutoff_angstrom is not None:
-            xyz = descriptor.mol.atom_coords(unit="Angstrom")
-            positions = torch.as_tensor(xyz[list(descriptor.descriptor_atom_indices)])
-        energy = self(features.to(self.input_reference), positions)
-        return self.correction_with_offsets(descriptor.mol, energy)
-
-    def correction_with_offsets(self, molecule, energy):
-        """Add elemental baselines to a scalar network energy and return Hartree."""
-        elements = [int(molecule.atom_charge(i)) for i in descriptor_atom_indices(molecule)]
-        if isinstance(energy, torch.Tensor):
-            energy = energy.item()
-        correction = float(energy) + self.element_offset(elements)
-        if not math.isfinite(correction):
-            raise ValueError("single-state energy correction must be finite")
-        return float(correction)
-
-    def total_energy(self, reference):
-        """Compose the HF and learned energies for this single electronic state."""
-        correction = self.correction_energy(reference)
-        return float(reference.e_tot) + correction
-
     def save(self, filename):
         """Write a versioned energy checkpoint including projector and offsets."""
         data = dict(
@@ -292,3 +296,46 @@ class SpinCorrNet(torch.nn.Module):
         )
         model.network.load_state_dict(net["state_dict"], strict=True)
         return model.eval()
+
+class SpinEnsemble(SpinEnergyModel):
+    """Equally weighted corrections on one HF root, with one shared descriptor and adjoint."""
+
+    def __init__(self, members):
+        super().__init__()
+        members = list(members)
+        if not members or not all(type(m) is SpinCorrNet for m in members):
+            raise ValueError("a spin ensemble requires one or more native SpinCorrNet checkpoints")
+        first = members[0]
+        for member in members[1:]:
+            if (member.projector_basis != first.projector_basis
+                    or member.spectrum_tau != first.spectrum_tau
+                    or member.relative_cutoff_angstrom != first.relative_cutoff_angstrom
+                    or member.mask_relative_spin != first.mask_relative_spin):
+                raise ValueError("ensemble members must share the projector and feature mapping")
+            if member.input_reference.dtype != first.input_reference.dtype:
+                raise ValueError("ensemble members must use the same network precision")
+        self.members = torch.nn.ModuleList(members)
+
+    @property
+    def projector_basis(self):
+        return self.members[0].projector_basis
+
+    @property
+    def spectrum_tau(self):
+        return self.members[0].spectrum_tau
+
+    @property
+    def input_reference(self):
+        return self.members[0].input_reference
+
+    @property
+    def relative_cutoff_angstrom(self):
+        return self.members[0].relative_cutoff_angstrom
+
+    def element_offset(self, elements):
+        return sum(m.element_offset(elements) for m in self.members) / len(self.members)
+
+    def forward(self, features, positions=None, atom_mask=None):
+        prepared = self.members[0].prepare_features(features, positions, atom_mask)
+        energies = [m.forward_prepared(prepared, atom_mask) for m in self.members]
+        return torch.stack(energies).mean(0)
