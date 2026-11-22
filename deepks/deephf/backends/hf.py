@@ -237,7 +237,7 @@ def _generativeqc(reference, restricted, device, controls, seed):
     return HFState(result.energy, np.ascontiguousarray(density))
 
 
-def solve_external(reference, family, engine, device, controls, seed, *, dm0=None):
+def solve_external(reference, family, engine, device, controls, seed, *, dm0=None, on_gpu_scf=None):
     """Run one external SCF and check its AO/spin conventions before projection."""
     if family not in ("rhf", "uhf"):
         raise ValueError("external DeePHF SCF engines support RHF and UHF")
@@ -258,9 +258,15 @@ def solve_external(reference, family, engine, device, controls, seed, *, dm0=Non
             gpu.conv_tol_grad = 5e-8
         else:
             gpu.conv_tol_grad = reference.conv_tol_grad
+        if (on_gpu_scf is not None and restricted and seed is None and dm0 is None
+                and reference.init_guess == "minao"):
+            # GPU4PySCF 1.8.1 can construct an invalid RHF MINAO guess.
+            dm0 = reference.get_init_guess(key="minao")
         gpu.kernel(dm0=dm0 if seed is None else projected_seed(seed, reference.mol))
         if not gpu.converged:
             raise RuntimeError("GPU4PySCF SCF did not converge")
+        if on_gpu_scf is not None:
+            on_gpu_scf(reference, gpu)
         state = HFState(float(gpu.e_tot), as_numpy(gpu.make_rdm1()))
     elif engine == "generativeqc":
         if device not in ("cpu", "cuda"):
@@ -276,7 +282,7 @@ def solve_external(reference, family, engine, device, controls, seed, *, dm0=Non
 def build_spin_reference(
     molecule, family, *, density_fit=False, scf_args=None, dft_args=None, dm0=None,
     verbose=0, auxbasis=None, scf_backend="pyscf", scf_device=None,
-    initial_reference=None, density_only=False,
+    initial_reference=None, density_only=False, on_gpu_scf=None,
 ):
     """Solve one molecular HF state, using canonical response orbitals when requested."""
     if scf_backend not in ("pyscf", "gpu4pyscf", "generativeqc"):
@@ -315,6 +321,7 @@ def build_spin_reference(
         state = solve_external(
             reference, family, scf_backend, "cuda" if scf_device is None else scf_device,
             dict(scf_args or {}), initial_reference, dm0=dm0,
+            **({"on_gpu_scf": on_gpu_scf} if on_gpu_scf is not None else {}),
         )
         if density_only:
             state.validate(molecule, family == "rhf", reference.get_ovlp())

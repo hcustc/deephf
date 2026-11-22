@@ -66,3 +66,27 @@ def test_ase_keeps_last_successful_frame(monkeypatch):
     assert len(calc.sequence.records) == 1
     atoms.get_forces()
     assert calc.sequence.records[-1]["initial_guess_source"] == "previous_reference"
+
+
+def test_ase_gpu_ensemble_uses_same_root_at_two_geometries():
+    import torch
+    pytest.importorskip("gpu4pyscf")
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    ref = reference(0)
+    net = SpinEnsemble([model(4), model(7)])
+    options = dict(family="rhf", auxbasis="def2-universal-jkfit",
+                   scf_args={"conv_tol": 1e-12, "conv_tol_grad": 6e-8})
+    atoms = Atoms(numbers=ref.mol.atom_charges(), positions=ref.mol.atom_coords(unit="Angstrom"))
+    cpu = atoms.copy()
+    cpu.calc = SpinDeePHFCalculator(ref.mol, net, **options)
+    atoms.calc = SpinDeePHFCalculator(
+        ref.mol, net, scf_backend="gpu4pyscf", device="cuda", gpu_derivatives="hf+df", **options,
+    )
+    for shift in (0., .003):
+        atoms.positions[1, 0] += shift
+        cpu.positions = atoms.positions
+        np.testing.assert_allclose(atoms.get_forces(), cpu.get_forces(), atol=1e-6, rtol=0)
+        np.testing.assert_allclose(atoms.get_potential_energy(), cpu.get_potential_energy(),
+                                   atol=1e-7, rtol=0)
+    assert atoms.calc.sequence.records[-1]["initial_guess_source"] == "previous_reference"

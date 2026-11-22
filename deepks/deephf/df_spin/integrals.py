@@ -153,3 +153,58 @@ def device_df_jk(reference, device="cuda"):
             backend.get_jk = fallback
         else:
             del backend.get_jk
+
+
+def _factor_density(dm):
+    """Supply both signed factors to GPU4PySCF, including small response eigenvalues."""
+    import cupy as cp
+    from gpu4pyscf.lib.cupy_helper import tag_array
+
+    # The default upstream factorization discards |eigenvalue| < 1e-8.
+    # Discard only numerical nulls and pad unequal UHF ranks with zero columns.
+    factors = []
+    for block in dm.reshape(-1, *dm.shape[-2:]):
+        values, vectors = cp.linalg.eigh(block)
+        keep = abs(values) > cp.finfo(values.dtype).eps * len(values) * abs(values).max()
+        factors.append((vectors[:, keep], values[keep]))
+    rank = max(len(w) for _, w in factors)
+    left = cp.zeros((len(factors), dm.shape[-1], rank), dtype=dm.dtype)
+    right = cp.zeros_like(left)
+    for idx, (vectors, values) in enumerate(factors):
+        left[idx, :, :len(values)] = vectors
+        right[idx, :, :len(values)] = vectors * values
+    shape = (*dm.shape[:-1], rank)
+    return tag_array(dm, factor_l=left.reshape(shape), factor_r=right.reshape(shape))
+
+
+def gpu_fock_derivative(reference, native_gpu, probe):
+    """Contract dF/dR at fixed AO density with a symmetric, possibly indefinite probe.
+
+    The DF two-electron energy gradient G is quadratic in the density. Its
+    polarization [G(P+sQ)-G(P-sQ)]/(2s) is the exact mixed contraction.
+    Rescale Q to avoid cancellation for small adjoint right-hand sides.
+    """
+    import cupy as cp
+
+    probe = np.asarray(probe)
+    density = np.asarray(reference.make_rdm1())
+    q = probe.reshape(density.shape)
+    qnorm = np.max(np.abs(q))
+    if qnorm == 0:
+        return np.zeros((reference.mol.natm, 3))
+    density_norm = np.max(np.abs(density)) or 1.0
+    scaled_probe = (q / qnorm) * density_norm
+    grad = native_gpu.nuc_grad_method()
+    grad.auxbasis_response = True
+    def jk_gradient(dm):
+        if not np.any(dm):
+            return np.zeros((reference.mol.natm, 3))
+        return grad.jk_energy_per_atom(_factor_density(cp.asarray(dm)), hermi=1)
+
+    plus = jk_gradient(density + scaled_probe)
+    minus = jk_gradient(density - scaled_probe)
+    hcore = reference.nuc_grad_method().hcore_generator(reference.mol)
+    total_probe = probe.reshape(-1, *q.shape[-2:]).sum(axis=0)
+    one = np.stack([np.einsum("xij,ij->x", hcore(a), total_probe)
+                    for a in range(reference.mol.natm)])
+    return one + (plus - minus) * (0.5 * qnorm / density_norm)

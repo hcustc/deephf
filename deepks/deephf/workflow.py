@@ -161,8 +161,20 @@ def make_deephf(
     )
 
 
+def _gpu_force_sources(mode, model, backend, scf_backend, density_fit, energy_only):
+    """Keep the native SCF object only between building and evaluating this frame."""
+    if mode is None:
+        return None
+    if (mode not in ("hf", "hf+df") or not isinstance(model, SpinEnergyModel)
+            or backend != "zvector" or scf_backend != "gpu4pyscf"
+            or not density_fit or energy_only):
+        raise ValueError("gpu_derivatives requires spin DF forces, GPU4PySCF SCF, "
+                         "zvector and mode 'hf' or 'hf+df'")
+    return {}
+
+
 def _reference_builder(
-    model, density_fit, energy_only, *, scf_backend, scf_device, auxbasis, density_only=False,
+    model, density_fit, energy_only, *, scf_backend, scf_device, auxbasis, density_only=False, gpu_sources=None,
 ):
     """Select a solver before SCF, keeping the conventional GPU workflow as its default."""
     spin_model = isinstance(model, SpinEnergyModel)
@@ -175,6 +187,7 @@ def _reference_builder(
         return partial(
             build_spin_reference, density_fit=density_fit, auxbasis=auxbasis,
             scf_backend="pyscf" if scf_backend is None else scf_backend, scf_device=scf_device,
+            **({"on_gpu_scf": gpu_sources.__setitem__} if gpu_sources is not None else {}),
             density_only=density_only and energy_only and (spin_model or bare_energy),
         )
     return partial(build_reference, auxbasis=auxbasis, scf_device=scf_device)
@@ -334,13 +347,15 @@ def evaluate_molecule(
     scf_backend=None,
     scf_device=None,
     initial_reference=None,
+    gpu_derivatives=None,
 ):
     """Evaluate one state and optionally omit its descriptor and derivatives."""
     if isinstance(model, SpinEnergyModel):
         _check_spin_projector(model, projector_basis)
+    sources = _gpu_force_sources(gpu_derivatives, model, backend, scf_backend, density_fit, energy_only)
     build = _reference_builder(
         model, density_fit, energy_only, scf_backend=scf_backend, scf_device=scf_device,
-        auxbasis=auxbasis, density_only=True,
+        auxbasis=auxbasis, density_only=True, gpu_sources=sources,
     )
     reference = build(
         molecule,
@@ -365,6 +380,7 @@ def evaluate_molecule(
         response_options=response_options,
         adjoint_options=adjoint_options,
         energy_only=energy_only,
+        gpu_derivatives=gpu_derivatives, native_gpu=None if sources is None else sources.pop(reference),
     )
 
 
@@ -387,6 +403,7 @@ def _evaluate_reference(
     response_options=None,
     adjoint_options=None,
     energy_only=False,
+    gpu_derivatives=None, native_gpu=None,
 ):
     """Evaluate one already converged native reference without rebuilding it."""
     if energy_only and model is None and not is_gpu_reference(reference):
@@ -401,7 +418,9 @@ def _evaluate_reference(
             reference, model, projector_basis=projector_basis, device=device,
             response_options=response_options, adjoint_options=adjoint_options,
         )
-        energy, features, gradient = method._evaluate_on_validated_root(backend)
+        energy, features, gradient = method._evaluate_on_validated_root(
+            backend, native_gpu=native_gpu, gpu_df=gpu_derivatives == "hf+df",
+        )
         correction = model.correction_with_offsets(reference.mol, energy)
         result = _state_energies(reference.e_tot, correction)
         result.update(descriptor=as_numpy(features), gradient=gradient, force=-gradient)
@@ -685,6 +704,7 @@ def main(
     auxbasis=None,
     scf_backend=None,
     scf_device=None,
+    gpu_derivatives=None,
 ):
     """Run strict DeePHF inference for every frame and persist canonical outputs."""
     if model_file is None or str(model_file).upper() == "NONE":
@@ -697,9 +717,10 @@ def main(
             model = SpinCorrNet.load_dict(checkpoint)
         else:
             model = CorrNet.load_dict(checkpoint, strict=True).double().eval()
+    sources = _gpu_force_sources(gpu_derivatives, model, backend, scf_backend, density_fit, energy_only)
     build = _reference_builder(
         model, density_fit, energy_only, scf_backend=scf_backend, scf_device=scf_device,
-        auxbasis=auxbasis,
+        auxbasis=auxbasis, gpu_sources=sources,
     )
     mol_args = {} if mol_args is None else dict(mol_args)
     outputs = []
@@ -733,7 +754,8 @@ def main(
                     device=device,
                     response_options=response_options,
                     adjoint_options=adjoint_options,
-                    energy_only=energy_only,
+                    energy_only=energy_only, gpu_derivatives=gpu_derivatives,
+                    native_gpu=None if sources is None else sources.pop(native_reference),
                 )
             )
         if not frames:

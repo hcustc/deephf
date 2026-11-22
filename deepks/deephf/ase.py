@@ -109,28 +109,44 @@ class SpinDeePHFCalculator(_MolecularCalculator):
 
     def __init__(
         self, molecule, model, *, family, backend="zvector", device="cpu",
-        scf_backend="pyscf", scf_device=None, auxbasis=None, scf_args=None,
+        scf_backend="pyscf", scf_device=None, auxbasis=None, scf_args=None, gpu_derivatives=None,
         root_overlap_tolerance=0.5, **kwargs,
     ):
         from functools import partial
         from deepks.model.spin import SpinEnergyModel
-        from .workflow import _ReferenceSequence, _evaluate_reference, _reference_builder
+        from .workflow import _ReferenceSequence, _evaluate_reference, _gpu_force_sources, _reference_builder
 
         super().__init__(**kwargs)
         if not isinstance(model, SpinEnergyModel) or family not in {"rhf", "uhf"}:
             raise ValueError("spin ASE calculations require a spin model and RHF or UHF")
         self.template_molecule = molecule.copy()
         self.atomic_numbers = np.asarray(molecule.atom_charges(), dtype=np.int64)
-        build = _reference_builder(model, True, False, scf_backend=scf_backend,
-                                   scf_device=scf_device, auxbasis=auxbasis)
+        self._gpu_sources = _gpu_force_sources(gpu_derivatives, model, backend, scf_backend, True, False)
+        build = _reference_builder(
+            model, True, False, scf_backend=scf_backend, scf_device=scf_device,
+            auxbasis=auxbasis, gpu_sources=self._gpu_sources,
+        )
         self.sequence = _ReferenceSequence(
             family, build=build, scf_args=scf_args, seed_with_reference=True,
             root_overlap_tolerance=root_overlap_tolerance,
         )
-        self._evaluate = partial(_evaluate_reference, model=model, backend=backend, device=device)
+        self._evaluate = partial(
+            _evaluate_reference, model=model, backend=backend, device=device,
+            gpu_derivatives=gpu_derivatives,
+        )
 
     def scanner(self, molecule):
-        result = self.sequence.build(molecule, evaluate=self._evaluate)
+        if self._gpu_sources is None:
+            result = self.sequence.build(molecule, evaluate=self._evaluate)
+        else:
+            def evaluate(ref):
+                return self._evaluate(ref, native_gpu=self._gpu_sources.pop(ref))
+
+            try:
+                result = self.sequence.build(molecule, evaluate=evaluate)
+            finally:
+                # A rejected root never reaches evaluation or becomes an anchor.
+                self._gpu_sources.clear()
         return result["e_tot"], result["gradient"]
 
 

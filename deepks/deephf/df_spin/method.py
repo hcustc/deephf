@@ -11,10 +11,11 @@ from deepks.descriptor import (
     AtomicDensityDescriptor, DescriptorDifferentiabilityError, projected_density,
     validate_differentiability,
 )
+from deepks.gpu import as_numpy
 
 from ..backends.generativeqc_response import generativeqc_response
 from ..backends.hf import build_spin_reference as build_spin_reference
-from .integrals import DFFockDerivative, auxiliary_molecule
+from .integrals import DFFockDerivative, auxiliary_molecule, gpu_fock_derivative
 from .orbitals import DFOrbitalResponse
 
 
@@ -76,7 +77,7 @@ def _validate_spectrum(descriptor, features, reference, *, smooth):
 def _hf_gradient(reference):
     driver = reference.nuc_grad_method()
     driver.auxbasis_response = True
-    return np.asarray(driver.kernel())
+    return as_numpy(driver.kernel())
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,7 @@ class DFSpinDeePHF:
         return gradient
 
     @torch.enable_grad()
-    def _evaluate_on_validated_root(self, backend):
+    def _evaluate_on_validated_root(self, backend, *, native_gpu=None, gpu_df=False):
         """Return the network energy before elemental offsets, raw features and gradient.
 
         Use the same features and forward pass for all three outputs. The direct
@@ -192,12 +193,15 @@ class DFSpinDeePHF:
         response = (generativeqc_response(ref, self.device) if backend == "generativeqc-zvector"
                     else nullcontext(DFOrbitalResponse(ref, self.device)))
         with response as orbital:
-            gradient = _hf_gradient(ref) + explicit + self._orbital_gradient(potential, orbital)
+            hf = _hf_gradient(ref if native_gpu is None else native_gpu)
+            gradient = hf + explicit + self._orbital_gradient(
+                potential, orbital, native_gpu=native_gpu if gpu_df else None
+            )
         if not np.isfinite(gradient).all():
             raise ValueError("nonfinite DF-HF/model gradient")
         return energy.detach(), features.detach(), gradient
 
-    def _orbital_gradient(self, potential, orbital):
+    def _orbital_gradient(self, potential, orbital, *, native_gpu=None):
         """Contract the relaxed density motion, including its AO-metric gauge."""
         ref = self.reference
         potentials = potential.reshape(-1, ref.mol.nao, ref.mol.nao).to(self.device)
@@ -223,7 +227,11 @@ class DFSpinDeePHF:
             gauge = orbital.weight * o @ (o.T @ p @ o - h_occ) @ o.T
             metric_weights.append((weighted + weighted.T) * 0.5 - gauge)
         metric_term = torch.einsum("xij,ij->x", orbital.overlap_motion(), sum(metric_weights))
-        fock_term = DFFockDerivative(ref).contract(torch.stack(pairs).cpu().numpy())
+        probe = torch.stack(pairs).cpu().numpy()
+        if native_gpu is None:
+            fock_term = DFFockDerivative(ref).contract(probe)
+        else:
+            fock_term = gpu_fock_derivative(ref, native_gpu, probe)
         return metric_term.reshape(-1, 3).cpu().numpy() - fock_term
 
     def forces(self, *, backend="zvector"):
